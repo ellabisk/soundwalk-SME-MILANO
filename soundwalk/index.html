@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SoundWalk</title> 
+    <link rel="stylesheet" href="ellastyle.css">
+    <link rel="stylesheet" href="aurorastyle.css">
+</head>
+<body>
+    <!-- HOME -->
+    <div id="home" class="page">
+        <div class="container">
+            <img src="consverticale.jpeg" class="background">
+            <button class="btn btn-entra" onclick="vaiMenu()">Entra</button>
+        </div>
+    </div>
+
+    <!-- MENU -->
+    <div id="menu" class="page hidden">
+        <h1>Scegli un bottone</h1>
+        <div class="container">
+            <img src="planimetria.jpeg" class="background">
+            <button class="btn b1" onclick="vaiPagina(1)">Pianoforte</button>
+            <button class="btn b2" onclick="vaiPagina(2)">131</button>
+            <button class="btn b3" onclick="vaiPagina(3)">129 (spazializzazione)</button>
+            <button class="btn b4" onclick="vaiPagina(4)">130 (finestra esterna)</button>
+            <button class="btn b5" onclick="vaiPagina(5)">Corridoio</button>
+            <button class="btn b6" onclick="vaiPagina(6)">Bagno</button>
+        </div>
+    </div>
+
+    <!-- CONTENUTO -->
+    <div id="contenuto" class="page hidden">
+        <h1 id="titolo"></h1>
+    </div>
+    
+    <script src="installazione_ella.js"></script>
+    <script src="aurora.js"></script>
+    <script src="function.js"></script>
+</body>
+</html>
