@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>SoundWalk</title> 
+    <link rel="stylesheet" href="/ellastyle.css">
+    <link rel="stylesheet" href="/aurorastyle.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"> <!--per far si che la pagina si adatti a diversi dispositivi e dimensioni dello schermo-->    
+    
+</head>
+
+<body>
+
+    <!-- HOME -->
+    <div id="home" class="page">
+        
+
+        <div class="container">
+            <img src="consverticale.jpeg" class="background">  <!--Immagine di sfondo, che sarà la porta del dipartimento o Saldicco-->
+            <button class="btn btn-entra" onclick="vaiMenu()">Entra</button>  <!--Bottone centrale per accedere al menu, con la funzione "vaiMenu()" che sarà definita in function.js-->
+        </div>
+    </div>
+
+
+    <!-- qui siamo già dentro la seconda pagina, quella del menu, che è nascosta all'inizio (classe "hidden") e viene mostrata quando si clicca sul bottone "Entra" della home.-->
+   
+    <div id="menu" class="page hidden">
+        <h1>Scegli un bottone</h1>
+
+        <div class="container">
+            <img src="planimetria.jpeg" class="background">
+
+            <button class="btn b1" onclick="vaiPagina(1)">Pianoforte</button> <!--richiama la funzione "vaiPagina()" con l'argomento 1, che sarà definita in function.js e servirà a mostrare la pagina corrispondente al bottone cliccato-->
+            <button class="btn b2" onclick="vaiPagina(2)">131</button> <!--idem-->
+            <button class="btn b3" onclick="vaiPagina(3)">129 (spazializzazione)</button>
+            <button class="btn b4" onclick="vaiPagina(4)">130 (finestra esterna)</button>
+            <button class="btn b5" onclick="vaiPagina(5)">Corridoio</button>
+            <button class="btn b6" onclick="vaiPagina(6)">Bagno</button>
+        </div>
+    </div>
+
+    <!-- CONTENUTO -->
+    <div id="contenuto" class="page hidden"> <!--hidden così ho le pagine nascoste e non le vedo fino a che non vi accedo-->
+        <h1 id="titolo"></h1>
+        <!--<button  class="btnBack" onclick="tornaMenu()">Torna indietro</button> così torno alla pagina iniziale xon gli altri bottoni-->
+        
+    </div>
+    
+    <script src="installazione_ella.js"></script>
+    <script src="aurora.js">    </script>
+    <script src="function.js"></script>
+    <script src="server.js"></script>
+    
+    
+
+
+</body>
+</html>
