@@ -25,7 +25,7 @@ function vaiPagina(num) {
     //document.getElementById("titolo").innerText = "Pagina bottone " + num;
 }
 
-    if (num===5){///in questo modo facendo la stessa con ===agli altri numri si posso richiamare le pagine create dagli altri
+    if (num===2){///in questo modo facendo la stessa con ===agli altri numri si posso richiamare le pagine create dagli altri
         creaCorridoio();
 } else{
     document.getElementById("contenuto").classList.remove("hidden");
