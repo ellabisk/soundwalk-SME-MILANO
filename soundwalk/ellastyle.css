@@ -35,7 +35,7 @@ body {
     left: 0;
     width: 100%;
     height: 100%;
-    object-fit: centre centre;
+    object-fit: cover;
     object-position: center top;
     display: block;
 }
@@ -46,14 +46,14 @@ body {
 .btn {
     position: absolute;
     z-index: 2;
-    padding: 14px 34px;
+    padding: 8px 20px;
     background: rgba(255, 255, 255, 0.12);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
     color: white;
     border: 1px solid rgba(255, 255, 255, 0.3);
     border-radius: 999px;
-    font-size: 18px;
+    font-size: 14px;
     letter-spacing: 0.1em;
     cursor: pointer;
     transition: background 0.3s ease, transform 0.3s ease;
@@ -76,18 +76,38 @@ body {
 }
 
 /* bottoni menu */
-.b1 { top: 20%; left: 20%;transform: translateX(-50%); }
-.b2 { top: 20%; left: 60%;transform: translateX(-50%); }
-.b3 { top: 50%; left: 70%;transform: translateX(-50%); }
-.b4 { top: 70%; left: 20%;transform: translateX(-50%); }
-.b5 { top: 70%; left: 60%;transform: translateX(-50%); }
-.b6 { top: 20%; left: 40%;transform: translateX(-50%); }
+
+.b1 { top: 54%; left: 28%;transform: translateX(-50%); }
+
+.b2 { top: 85%; left: 60%;transform: translateX(-50%); }
 
 .b1:hover, .b2:hover, .b3:hover, .b4:hover, .b5:hover, .b6:hover {
     transform: translateX(-50%) scale(1.05);
 }
 
-r
+/* tasto 131 — posizione riga arancione */
+.btn-131 {
+    top: 57%;
+    left: 28%;
+    transform: translateX(-50%);
+}
+
+.btn-131:hover {
+    transform: translateX(-50%) scale(1.05);
+}
+
+/* tasto CORRIDOIO — posizione riga verde */
+.btn-corridoio {
+    top: 84%;
+    left: 56%;
+    transform: translateX(-50%);
+}
+
+.btn-corridoio:hover {
+    transform: translateX(-50%) scale(1.05);
+}
+
+
 #cameraContainer {
     width: 300px;
     height: 200px;
