@@ -8,37 +8,88 @@
     <link rel="stylesheet" href="aurorastyle.css">
     <link rel="stylesheet" href="filippo-jesse.css">
 </head>
+
 <body>
+
     <!-- HOME -->
     <div id="home" class="page">
         <div class="container">
             <img src="consverticale.jpeg" class="background">
-            <button class="btn btn-entra" onclick="vaiMenu()">Entra</button>
+            <button class="btn btn-entra" onclick="mostraPagina('menu')">
+                Entra
+            </button>
         </div>
     </div>
 
-    <!-- MENU -->
-    <div id="menu" class="page hidden">
-      
+  <!-- MENU -->
+<div id="menu" class="page hidden">
+    <div class="container">
+        <img src="prova_2.jpeg" class="background">
+
+        <button class="btn b1" onclick="mostraPagina('pianoforte')">
+            131
+        </button>
+
+        <button class="btn b2" onclick="mostraPagina('corridoio')">
+            Corridoio
+        </button>
+    </div>
+</div>
+
+
+    <!-- PIANOFORTE -->
+    <div id="pianoforte" class="page hidden">
         <div class="container">
-            <img src="prova_2.jpeg" class="background">
-            <!--<button class="btn b1" onclick="vaiPagina(1)">Pianoforte</button>-->
-            <button class="btn b1" onclick="vaiPagina(1)">131</button>
-           <!--<button class="btn b3" onclick="vaiPagina(3)">129 (spazializzazione)</button>-->
-           <!-- <button class="btn b4" onclick="vaiPagina(4)">130 (finestra esterna)</button>-->
-            <button class="btn b2" onclick="vaiPagina(2)">Corridoio</button>
-           <!--<button class="btn b6" onclick="vaiPagina(6)">Bagno</button>-->
+            <h1>Pianoforte</h1>
+
+            <button class="btn" onclick="avviaPianoforte()">
+                Avvia
+            </button>
+
+            <button class="btn" onclick="mostraPagina('menu')">
+                Torna indietro
+            </button>
         </div>
     </div>
 
-    <!-- CONTENUTO -->
-    <div id="contenuto" class="page hidden">
-        <h1 id="titolo"></h1>
+   <!-- CORRIDOIO -->
+<div id="corridoio" class="page hidden">
+    <div class="header">
+        <p class="sottotitolo">Installazione interattiva</p>
+        <h1>Visual Soundwalk</h1>
+        <div class="divisore"></div>
+        <p class="descrizione">
+            Inquadra ciò che ti circonda. <br>
+            Quando l'immagine diventa suono.
+        </p>
     </div>
-    
+
+    <button id="btnAvvia" class="btn center" onclick="avviaCorridoio()">Avvia</button>
+
+    <video id="video" autoplay playsinline muted></video>
+
+    <div class="riquadro1">
+        <div class="riquadro">
+            <p class="riquadro2">Luminosità</p>
+            <div id="luminosita">0%</div>
+        </div>
+        <div class="riquadro">
+            <p class="riquadro2">RGB</p>
+            <div id="rgbDisplay">R 0%  G 0%  B 0%</div>
+        </div>
+    </div>
+
+    <div id="parzialiDisplay">
+        Parziali — R:0  G:0  B:0
+    </div>
+
+    <button id="btnTorna" class="btn" onclick="mostraPagina('menu')">Torna indietro</button>
+</div>
+
     <script src="installazione_ella.js"></script>
     <script src="aurora.js"></script>
     <script src="filippo-jesse.js"></script>
     <script src="function.js"></script>
+
 </body>
 </html>

@@ -11,10 +11,7 @@ body {
     overflow: hidden;
 }
 
-/* pagine */
-.page {
-    display: block;
-}
+
 
 .hidden {
     display: none !important;
@@ -77,7 +74,7 @@ body {
 
 /* bottoni menu */
 
-.b1 { top: 68%; left: 28%;transform: translateX(-50%); }
+.b1 { top: 54%; left: 28%;transform: translateX(-50%); }
 
 .b2 { top: 85%; left: 60%;transform: translateX(-50%); }
 

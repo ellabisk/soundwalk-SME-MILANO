@@ -34,47 +34,6 @@ const MaxParziali = 16
 const GainDiBase  = 0.06  // abbassato per evitare clipping con 16 parziali × 3 synth
 
 
-function creaCorridoio() {
-    const corridoio = document.createElement("div")
-    corridoio.id = "corridoio"
-    corridoio.className = "page"
-                                         //scrivo qui così da non sporcare l'html che invece sarà invece a disposizione di tutti 
-    corridoio.innerHTML = `
-    <div class="header">
-        <p class="sottotitolo">Installazione interattiva</p>
-        <h1>Visual Soundwalk</h1>
-        <div class="divisore"></div>
-        <p class="descrizione">
-            Inquadra ciò che ti circonda. <br>
-            Quando l'immagine diventa suono.
-        </p>
-    </div>
-
-     <button id="btnAvvia" class="btn center" onclick="avviaCorridoio()">Avvia</button>
-
-    <video id="video" autoplay playsinline muted></video> 
-    <!-- autoplay per far partire la camera appena creata, playsinline per aprire la camera dentro la pagina e non con un suo player di defoult, muted perché altrimenti molti browser non fanno partire la camera se non è muta -->
-
-    <div class="riquadro1">
-        <div class="riquadro">
-            <p class="riquadro2">Luminosità</p>
-            <div id="luminosita">0%</div>
-        </div>
-        <div class="riquadro">
-            <p class="riquadro2">RGB</p>
-            <div id="rgbDisplay">R 0%  G 0%  B 0%</div>
-        </div>
-    </div>
-
-    <div id="parzialiDisplay">
-        Parziali — R:0  G:0  B:0
-    </div>
-
-    <button id="btnTorna" class="btn" onclick="tornaMenu()">Torna indietro</button> 
-    `
-
-    document.body.appendChild(corridoio)
-}
 
 
 async function avviaCorridoio() {
@@ -431,11 +390,5 @@ function tornaMenu() {
     smoothG = 0;
     smoothB = 0;
 
-    // rimuovi la pagina corridoio
-    const corr = document.getElementById("corridoio");
-    if (corr) corr.remove();
-
-    // torna al menu
-    document.getElementById("contenuto").classList.add("hidden");
-    document.getElementById("menu").classList.remove("hidden");
+    mostraPagina('menu');
 }

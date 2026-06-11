@@ -1,8 +1,6 @@
 function creaPianoforte() {
-    const pianoforte = document.createElement("div")
-    pianoforte.id = "pianoforte"
-    pianoforte.className = "page"
-                                         //scrivo qui così da non sporcare l'html che invece sarà invece a disposizione di tutti 
+    const pianoforte = document.getElementById("pianoforte");
+
     pianoforte.innerHTML = `
     <div class="header">
         <p class="sottotitolo">Installazione interattiva</p>
@@ -13,12 +11,8 @@ function creaPianoforte() {
         </p>
     </div>
 
-     <button id="btnAvvia" class="btn center" onclick="avviaPianoforte()">Avvia</button>
+    <button id="btnAvvia" class="btn center" onclick="avviaPianoforte()">Avvia</button>
 
-
-
-    <button id="btnTorna" class="btn" onclick="tornaMenu()">Torna indietro</button> 
-    `
-
-    document.body.appendChild(pianoforte)
+    <button id="btnTorna" class="btn" onclick="mostraPagina('menu')">Torna indietro</button>
+    `;
 }
