@@ -1,0 +1,184 @@
+/* =====================================================================
+   SOUNDWALK — STANZA 131 · IL PIANOFORTE
+   Stile retro 8-bit. Tutti i selettori sono prefissati con #pianoforte
+   (e/o classi pf-*) per NON collidere con ellastyle.css / aurorastyle.css.
+   ===================================================================== */
+
+/* La stanza occupa tutto lo schermo quando è la pagina attiva. */
+#pianoforte {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  background: #0e1230;
+  overflow: hidden;
+  font-family: "Courier New", monospace;
+  color: #fff;
+}
+
+#pianoforte #pianoApp {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+/* Canvas a tutto schermo */
+#pianoforte #gameCanvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  background: #0e1230;
+}
+
+/* Overlay (start / tilt / game over) */
+#pianoforte .pf-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  box-sizing: border-box;
+  background: rgba(14, 18, 48, 0.92);
+  z-index: 10;
+}
+
+/* riusa la .hidden globale del sito (display:none !important), ma la
+   ridichiariamo per sicurezza nel caso il file venga usato isolato */
+#pianoforte .pf-overlay.hidden,
+#pianoforte #debugPanel.hidden {
+  display: none !important;
+}
+
+/* Titoli arcade */
+#pianoforte .pf-title {
+  font-size: 34px;
+  letter-spacing: 3px;
+  margin: 0 0 12px;
+  color: #ffd166;
+  text-shadow: 3px 3px 0 #ef476f;
+}
+
+#pianoforte .pf-title.pf-gameover {
+  color: #ef476f;
+  text-shadow: 3px 3px 0 #10122b;
+}
+
+#pianoforte .pf-subtitle {
+  font-size: 16px;
+  line-height: 1.5;
+  margin: 0 0 28px;
+  color: #aab4f0;
+}
+
+#pianoforte .pf-hint {
+  margin-top: 22px;
+  font-size: 12px;
+  color: #6b76b8;
+}
+
+/* Bottone principale, touch-friendly. Nome classe pf-bigBtn così NON
+   eredita lo stile .btn condiviso (posizione assoluta) che lo romperebbe. */
+#pianoforte .pf-bigBtn {
+  font-family: inherit;
+  font-size: 20px;
+  font-weight: bold;
+  letter-spacing: 2px;
+  color: #10122b;
+  background: #06d6a0;
+  border: none;
+  border-bottom: 5px solid #048a67;
+  border-radius: 10px;
+  padding: 16px 42px;
+  cursor: pointer;
+  transition: transform 0.05s, filter 0.1s;
+  min-width: 200px;
+}
+
+#pianoforte .pf-bigBtn:active {
+  transform: translateY(3px);
+  border-bottom-width: 2px;
+  filter: brightness(1.1);
+}
+
+#pianoforte .pf-bigBtn:disabled {
+  background: #4a5080;
+  border-bottom-color: #333a5c;
+  color: #aab4f0;
+  cursor: default;
+}
+
+/* Link "Torna indietro" discreto in basso */
+#pianoforte .pf-back {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 1px;
+  color: #aab4f0;
+  background: transparent;
+  border: 1px solid rgba(170, 180, 240, 0.4);
+  border-radius: 999px;
+  padding: 8px 20px;
+  cursor: pointer;
+  z-index: 11;
+}
+
+#pianoforte .pf-back:active { filter: brightness(1.2); }
+
+/* Schermata tilt */
+#pianoforte .pf-phoneIcon {
+  font-size: 64px;
+  margin-bottom: 20px;
+  animation: pf-rock 1.6s ease-in-out infinite;
+}
+
+@keyframes pf-rock {
+  0%, 100% { transform: rotate(-12deg); }
+  50%      { transform: rotate(12deg); }
+}
+
+#pianoforte .pf-tiltMsg {
+  font-size: 18px;
+  line-height: 1.5;
+  color: #ffd166;
+  margin: 0 0 24px;
+  max-width: 320px;
+}
+
+/* Pannello di debug in un angolo */
+#pianoforte #debugPanel {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 20;
+  background: rgba(0, 0, 0, 0.65);
+  color: #06d6a0;
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border-radius: 6px;
+  pointer-events: none;
+  max-width: 70%;
+  text-align: left;
+}
+
+/* schermi bassi */
+@media (max-height: 560px) {
+  #pianoforte .pf-title { font-size: 26px; }
+  #pianoforte .pf-subtitle { margin-bottom: 18px; }
+  #pianoforte .pf-phoneIcon { font-size: 48px; }
+}
