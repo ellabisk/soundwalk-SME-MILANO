@@ -39,7 +39,7 @@
 
   // --- Soglie audio (da tarare dal vivo) ---
   const RMS_THRESHOLD = 0.012; // soglia di volume: sotto = silenzio/rumore
-  const CLARITY_MIN = 0.92;    // qualità minima del picco di autocorrelazione
+  const CLARITY_MIN = 0.78;    // qualità minima del picco di autocorrelazione
   const FMIN = 70;             // Hz minima cercata
   const FMAX = 1400;           // Hz massima cercata
   // Una nota è "azzeccata" se il MIDI arrotondato coincide col target (~±50 cent).
