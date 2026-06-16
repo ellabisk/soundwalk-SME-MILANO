@@ -37,11 +37,19 @@
   const DEBUG = true;          // pannello di debug in un angolo
   const MATCH_OCTAVE = false;  // false = qualsiasi ottava va bene (es. ogni DO)
 
-  // --- Soglie audio (da tarare dal vivo) ---
-  const RMS_THRESHOLD = 0.012; // soglia di volume: sotto = silenzio/rumore
-  const CLARITY_MIN = 0.78;    // qualità minima del picco di autocorrelazione
+  // --- Soglie audio (tarabili a runtime dalla schermata di calibrazione) ---
+  // Sono `let` perché gli slider di calibrazione le modificano dal vivo.
+  // I valori qui sotto sono i DEFAULT consigliati (anche pre-impostati sugli
+  // slider): trovati provando un pianoforte vero. Se cambi idea li ritocchi
+  // dal telefono senza ripassare da GitHub.
+  let RMS_THRESHOLD = 0.010;   // soglia di volume: sotto = silenzio/rumore
+  let CLARITY_MIN = 0.75;      // qualità minima del picco di autocorrelazione
   const FMIN = 70;             // Hz minima cercata
   const FMAX = 1400;           // Hz massima cercata
+
+  // Valori consigliati mostrati come riferimento sugli slider.
+  const RMS_RECOMMENDED = 0.010;
+  const CLARITY_RECOMMENDED = 0.75;
   // Una nota è "azzeccata" se il MIDI arrotondato coincide col target (~±50 cent).
 
   // --- Geometria musicale ---
@@ -91,6 +99,11 @@
   let elStart, elStartBtn, elReadyBtn, elTiltMsg, elTiltScreen;
   let elGameOver, elRestartBtn, elFinalScore, elDebug;
 
+  // schermata di calibrazione microfono
+  let elCalibScreen, elCalibVu, elCalibNote, elCalibRms, elCalibClarity;
+  let elRmsSlider, elRmsVal, elClaritySlider, elClarityVal, elCalibContinue;
+  let calibRafId = null; // loop dedicato alla calibrazione (separato dal gioco)
+
   let initialized = false; // per rendere avviaPianoforteInit idempotente
 
   // audio
@@ -99,6 +112,7 @@
 
   // sensori
   let orientationHandler = null, tiltOkSince = 0, tiltGatePassed = false;
+  let orientPermission = "unavailable"; // esito di requestOrientationPermission
 
   // game loop
   let rafId = null, lastTs = 0, running = false;
@@ -594,6 +608,7 @@
     running = false;
     if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
     stopTiltGate();
+    stopCalibration();
     gameState = "idle";
     if (elGameOver) elGameOver.classList.add("hidden");
     if (elTiltScreen) elTiltScreen.classList.add("hidden");
@@ -616,8 +631,76 @@
   }
 
   /* =====================================================================
-     (6) BOOTSTRAP — creaPianoforte() + avviaPianoforteInit()
+     CALIBRAZIONE MICROFONO (schermata di prova pre-gioco)
+     Loop dedicato, separato dal game loop: legge il microfono, mostra
+     VU/nota/clarity in tempo reale e lascia regolare le due soglie con
+     gli slider. Le soglie modificate valgono per tutta la sessione.
      ===================================================================== */
+
+  function startCalibration() {
+    gameState = "calibrating";
+    if (elCalibScreen) elCalibScreen.classList.remove("hidden");
+
+    // pre-imposta gli slider sui valori correnti
+    if (elRmsSlider) {
+      elRmsSlider.value = RMS_THRESHOLD;
+      elRmsVal.textContent = RMS_THRESHOLD.toFixed(3);
+      elRmsSlider.oninput = () => {
+        RMS_THRESHOLD = parseFloat(elRmsSlider.value);
+        elRmsVal.textContent = RMS_THRESHOLD.toFixed(3);
+      };
+    }
+    if (elClaritySlider) {
+      elClaritySlider.value = CLARITY_MIN;
+      elClarityVal.textContent = CLARITY_MIN.toFixed(2);
+      elClaritySlider.oninput = () => {
+        CLARITY_MIN = parseFloat(elClaritySlider.value);
+        elClarityVal.textContent = CLARITY_MIN.toFixed(2);
+      };
+    }
+    if (elCalibContinue) {
+      elCalibContinue.onclick = () => {
+        stopCalibration();
+        goToTiltGate();
+      };
+    }
+
+    const tick = () => {
+      if (gameState !== "calibrating") return;
+      pollAudio();
+      renderCalibration();
+      calibRafId = requestAnimationFrame(tick);
+    };
+    calibRafId = requestAnimationFrame(tick);
+  }
+
+  function stopCalibration() {
+    if (calibRafId) { cancelAnimationFrame(calibRafId); calibRafId = null; }
+    if (elCalibScreen) elCalibScreen.classList.add("hidden");
+  }
+
+  // Aggiorna la barra VU e i readout durante la calibrazione.
+  function renderCalibration() {
+    if (!elCalibVu) return;
+    // barra VU: mappa l'RMS (0..~0.3 tipico) su 0..100%
+    const pct = Math.min(100, (lastRms / 0.3) * 100);
+    elCalibVu.style.width = pct.toFixed(0) + "%";
+    // colore: rosso sotto soglia, verde sopra (così vedi subito se "passa")
+    const passing = lastRms >= RMS_THRESHOLD;
+    elCalibVu.style.background = passing ? "#06d6a0" : "#ef476f";
+
+    if (lastDetected) {
+      elCalibNote.textContent = lastDetected.name + lastDetected.octave;
+      elCalibClarity.textContent = lastDetected.clarity.toFixed(2);
+    } else {
+      elCalibNote.textContent = "—";
+      // mostra comunque la clarity grezza se il volume passa ma la nota no
+      elCalibClarity.textContent = "0.00";
+    }
+    elCalibRms.textContent = lastRms.toFixed(3);
+  }
+
+
 
   // Inietta il markup della stanza dentro #pianoforte (chiamata dal router).
   // Sovrascrive il contenuto del div: qui mettiamo canvas + overlay del gioco.
@@ -633,6 +716,35 @@
           <p class="pf-subtitle">Corri sul pentagramma.<br>Suona le note per saltarle.</p>
           <button id="startBtn" class="pf-bigBtn">Avvia</button>
           <p class="pf-hint">Servono microfono e sensori del telefono.</p>
+          <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna indietro</button>
+        </div>
+
+        <div id="calibScreen" class="pf-overlay hidden">
+          <h2 class="pf-title">PROVA MICROFONO</h2>
+          <p class="pf-subtitle">Suona qualche nota sul pianoforte.<br>Controlla che il livello salga e che compaia la nota.</p>
+
+          <div class="pf-vuWrap">
+            <div id="calibVu" class="pf-vuBar"></div>
+          </div>
+          <div class="pf-calibReadout">
+            Nota: <span id="calibNote">—</span><br>
+            Volume (RMS): <span id="calibRms">0.000</span> ·
+            Qualità: <span id="calibClarity">0.00</span>
+          </div>
+
+          <div class="pf-sliderRow">
+            <label>Soglia volume</label>
+            <input id="rmsSlider" class="pf-slider" type="range" min="0.001" max="0.05" step="0.001">
+            <span id="rmsVal" class="pf-sliderVal">0.010</span>
+          </div>
+          <div class="pf-sliderRow">
+            <label>Soglia qualità</label>
+            <input id="claritySlider" class="pf-slider" type="range" min="0.50" max="0.95" step="0.01">
+            <span id="clarityVal" class="pf-sliderVal">0.75</span>
+          </div>
+          <p class="pf-hint">Consigliato: volume 0.010 · qualità 0.75. Abbassa se non rileva, alza se rileva nel silenzio.</p>
+
+          <button id="calibContinue" class="pf-bigBtn">Continua</button>
           <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna indietro</button>
         </div>
 
@@ -669,6 +781,18 @@
     elRestartBtn = document.getElementById("restartBtn");
     elFinalScore = document.getElementById("finalScore");
     elDebug = document.getElementById("debugPanel");
+
+    elCalibScreen = document.getElementById("calibScreen");
+    elCalibVu = document.getElementById("calibVu");
+    elCalibNote = document.getElementById("calibNote");
+    elCalibRms = document.getElementById("calibRms");
+    elCalibClarity = document.getElementById("calibClarity");
+    elRmsSlider = document.getElementById("rmsSlider");
+    elRmsVal = document.getElementById("rmsVal");
+    elClaritySlider = document.getElementById("claritySlider");
+    elClarityVal = document.getElementById("clarityVal");
+    elCalibContinue = document.getElementById("calibContinue");
+
     if (DEBUG && elDebug) elDebug.classList.remove("hidden");
     return true;
   }
@@ -681,12 +805,19 @@
     const audioOk = await initAudio();
     if (!audioOk) { elStartBtn.disabled = false; elStartBtn.textContent = "Avvia"; return; }
 
-    const orient = await requestOrientationPermission();
+    // chiedi SUBITO il permesso sensori (deve stare nel gesto del tap su iOS),
+    // ma il gate del tilt lo attiviamo solo dopo la calibrazione
+    orientPermission = await requestOrientationPermission();
 
     elStart.classList.add("hidden");
-    elTiltScreen.classList.remove("hidden");
+    // -> schermata di prova microfono
+    startCalibration();
+  }
 
-    if (orient === "unavailable") {
+  // Dopo la calibrazione: schermata "appoggia il telefono" + gate del tilt.
+  function goToTiltGate() {
+    elTiltScreen.classList.remove("hidden");
+    if (orientPermission === "unavailable") {
       elTiltMsg.textContent = "Sensori non disponibili. Premi quando sei pronto.";
       elReadyBtn.classList.remove("hidden");
     } else {
