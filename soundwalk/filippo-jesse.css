@@ -1,20 +1,39 @@
 /* =====================================================================
-   SOUNDWALK — STANZA 131 · IL PIANOFORTE
-   Stile retro 8-bit. Tutti i selettori sono prefissati con #pianoforte
-   (e/o classi pf-*) per NON collidere con ellastyle.css / aurorastyle.css.
+   SOUNDWALK — SALA 131 · IL PIANOFORTE
+   Estetica "Notturno del copista": manoscritto musicale visto di notte.
+   Carta blu-notte invecchiata, inchiostro avorio, accenti ametista/oro,
+   tipografia serif (Cormorant Garamond + EB Garamond).
+
+   Tutti i selettori sono sotto #pianoforte / .pf-* per non collidere con
+   ellastyle.css e aurorastyle.css.
    ===================================================================== */
 
-/* La stanza occupa tutto lo schermo quando è la pagina attiva. */
+/* I font arrivano da Google Fonts (il sito è su HTTPS, GitHub Pages). */
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=EB+Garamond:ital@0;1&display=swap');
+
+/* palette come variabili, riusate anche dal canvas via JS (PAL) */
 #pianoforte {
+  --pf-bg:     #0d1b2a;
+  --pf-bg2:    #13243a;
+  --pf-ink:    #e8dcc0;
+  --pf-inkdim: #9a8f76;
+  --pf-staff:  #5a7a99;
+  --pf-note:   #7fd4e8;
+  --pf-accent: #b794d4;
+  --pf-gold:   #d4a843;
+  --pf-err:    #c1666b;
+
   position: fixed;
   inset: 0;
   width: 100%;
   height: 100vh;
   height: 100dvh;
-  background: #0e1230;
+  background:
+    radial-gradient(ellipse 120% 80% at 30% 70%, rgba(212,168,67,0.06), transparent 60%),
+    var(--pf-bg);
   overflow: hidden;
-  font-family: "Courier New", monospace;
-  color: #fff;
+  color: var(--pf-ink);
+  font-family: 'EB Garamond', Georgia, 'Times New Roman', serif;
 }
 
 #pianoforte #pianoApp {
@@ -27,19 +46,15 @@
   touch-action: manipulation;
 }
 
-/* Canvas a tutto schermo */
 #pianoforte #gameCanvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   display: block;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
-  background: #0e1230;
 }
 
-/* Overlay (start / tilt / game over) */
+/* ---------- Overlay ---------- */
 #pianoforte .pf-overlay {
   position: absolute;
   inset: 0;
@@ -48,226 +63,274 @@
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 24px;
+  padding: 32px 26px 76px;
   box-sizing: border-box;
-  background: rgba(14, 18, 48, 0.92);
+  /* carta scura semitrasparente con vignettatura */
+  background:
+    radial-gradient(ellipse 100% 70% at 50% 45%, rgba(19,36,58,0.55), transparent 70%),
+    rgba(13,27,42,0.93);
   z-index: 10;
 }
 
-/* riusa la .hidden globale del sito (display:none !important), ma la
-   ridichiariamo per sicurezza nel caso il file venga usato isolato */
 #pianoforte .pf-overlay.hidden,
 #pianoforte #debugPanel.hidden {
   display: none !important;
 }
 
-/* Titoli arcade */
-#pianoforte .pf-title {
-  font-size: 34px;
-  letter-spacing: 3px;
-  margin: 0 0 12px;
-  color: #ffd166;
-  text-shadow: 3px 3px 0 #ef476f;
+/* eyebrow: piccola didascalia in maiuscoletto spaziato */
+#pianoforte .pf-eyebrow {
+  margin: 0 0 14px;
+  font-size: 12px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--pf-gold);
+  font-style: italic;
 }
 
-#pianoforte .pf-title.pf-gameover {
-  color: #ef476f;
-  text-shadow: 3px 3px 0 #10122b;
+/* titolo display: serif ampio, leggero, elegante */
+#pianoforte .pf-title {
+  margin: 0;
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-weight: 500;
+  font-size: clamp(40px, 13vw, 64px);
+  line-height: 1.02;
+  letter-spacing: 0.01em;
+  color: var(--pf-ink);
+}
+
+#pianoforte .pf-title--sm {
+  font-size: clamp(32px, 10vw, 48px);
+}
+
+/* filetto ornamentale sotto il titolo */
+#pianoforte .pf-rule {
+  width: 96px;
+  height: 1px;
+  margin: 18px 0 22px;
+  background: linear-gradient(90deg, transparent, var(--pf-gold), transparent);
+  position: relative;
+}
+#pianoforte .pf-rule::after {
+  content: "❦";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--pf-bg);
+  padding: 0 8px;
+  color: var(--pf-gold);
+  font-size: 13px;
 }
 
 #pianoforte .pf-subtitle {
-  font-size: 16px;
-  line-height: 1.5;
-  margin: 0 0 28px;
-  color: #aab4f0;
+  margin: 0 0 30px;
+  font-size: clamp(15px, 4.4vw, 18px);
+  line-height: 1.65;
+  color: var(--pf-inkdim);
+  max-width: 30ch;
 }
 
 #pianoforte .pf-hint {
-  margin-top: 22px;
-  font-size: 12px;
-  color: #6b76b8;
+  margin: 20px 0 0;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--pf-inkdim);
+  max-width: 32ch;
+  line-height: 1.5;
 }
 
-/* Bottone principale, touch-friendly. Nome classe pf-bigBtn così NON
-   eredita lo stile .btn condiviso (posizione assoluta) che lo romperebbe. */
+/* ---------- Bottone principale ---------- */
+/* niente gradiente squillante: filetto a inchiostro su carta, in stile timbro */
 #pianoforte .pf-bigBtn {
-  font-family: inherit;
-  font-size: 20px;
-  font-weight: bold;
-  letter-spacing: 2px;
-  color: #10122b;
-  background: #06d6a0;
-  border: none;
-  border-bottom: 5px solid #048a67;
-  border-radius: 10px;
-  padding: 16px 42px;
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--pf-ink);
+  background: transparent;
+  border: 1px solid var(--pf-gold);
+  border-radius: 2px;
+  padding: 14px 38px;
   cursor: pointer;
-  transition: transform 0.05s, filter 0.1s;
-  min-width: 200px;
+  position: relative;
+  transition: color 0.2s, background 0.2s, box-shadow 0.2s;
 }
-
+#pianoforte .pf-bigBtn::before,
+#pianoforte .pf-bigBtn::after {
+  content: "";
+  position: absolute;
+  left: 8px; right: 8px;
+  height: 1px;
+  background: var(--pf-gold);
+  opacity: 0.35;
+}
+#pianoforte .pf-bigBtn::before { top: 4px; }
+#pianoforte .pf-bigBtn::after { bottom: 4px; }
 #pianoforte .pf-bigBtn:active {
-  transform: translateY(3px);
-  border-bottom-width: 2px;
-  filter: brightness(1.1);
+  background: rgba(212,168,67,0.12);
+  box-shadow: 0 0 24px rgba(212,168,67,0.18);
 }
-
 #pianoforte .pf-bigBtn:disabled {
-  background: #4a5080;
-  border-bottom-color: #333a5c;
-  color: #aab4f0;
+  color: var(--pf-inkdim);
+  border-color: var(--pf-inkdim);
+  opacity: 0.6;
   cursor: default;
 }
 
-/* Link "Torna indietro" discreto in basso */
+/* link discreto di ritorno */
 #pianoforte .pf-back {
   position: absolute;
-  bottom: 18px;
+  bottom: 22px;
   left: 50%;
   transform: translateX(-50%);
-  font-family: inherit;
-  font-size: 13px;
-  letter-spacing: 1px;
-  color: #aab4f0;
+  font-family: 'EB Garamond', Georgia, serif;
+  font-style: italic;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  color: var(--pf-inkdim);
   background: transparent;
-  border: 1px solid rgba(170, 180, 240, 0.4);
-  border-radius: 999px;
-  padding: 8px 20px;
+  border: none;
+  border-bottom: 1px solid transparent;
+  padding: 4px 2px;
   cursor: pointer;
-  z-index: 11;
+  transition: color 0.2s, border-color 0.2s;
+}
+#pianoforte .pf-back:active {
+  color: var(--pf-ink);
+  border-bottom-color: var(--pf-gold);
 }
 
-#pianoforte .pf-back:active { filter: brightness(1.2); }
-
-/* Schermata tilt */
+/* ---------- Schermata tilt ---------- */
 #pianoforte .pf-phoneIcon {
-  font-size: 64px;
-  margin-bottom: 20px;
-  animation: pf-rock 1.6s ease-in-out infinite;
+  font-size: 80px;
+  line-height: 1;
+  margin-bottom: 22px;
+  color: var(--pf-gold);
+  animation: pf-sway 2.4s ease-in-out infinite;
 }
-
-@keyframes pf-rock {
-  0%, 100% { transform: rotate(-12deg); }
-  50%      { transform: rotate(12deg); }
+@keyframes pf-sway {
+  0%, 100% { transform: rotate(-8deg); opacity: 0.7; }
+  50%      { transform: rotate(8deg); opacity: 1; }
 }
-
 #pianoforte .pf-tiltMsg {
-  font-size: 18px;
-  line-height: 1.5;
-  color: #ffd166;
-  margin: 0 0 24px;
-  max-width: 320px;
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: clamp(19px, 5.5vw, 24px);
+  line-height: 1.4;
+  color: var(--pf-ink);
+  margin: 0 0 26px;
+  max-width: 22ch;
 }
 
-/* Pannello di debug in un angolo */
-#pianoforte #debugPanel {
-  position: absolute;
-  left: 8px;
-  bottom: 8px;
-  z-index: 20;
-  background: rgba(0, 0, 0, 0.65);
-  color: #06d6a0;
-  font-size: 11px;
-  line-height: 1.5;
-  padding: 8px 10px;
-  border-radius: 6px;
-  pointer-events: none;
-  max-width: 70%;
-  text-align: left;
-}
-
-/* schermi bassi */
-@media (max-height: 560px) {
-  #pianoforte .pf-title { font-size: 26px; }
-  #pianoforte .pf-subtitle { margin-bottom: 18px; }
-  #pianoforte .pf-phoneIcon { font-size: 48px; }
-}
-
-/* =====================================================================
-   CALIBRAZIONE MICROFONO
-   ===================================================================== */
-
-/* barra VU */
+/* ---------- Calibrazione ---------- */
 #pianoforte .pf-vuWrap {
-  width: 80%;
+  width: 84%;
   max-width: 320px;
-  height: 22px;
-  background: rgba(0, 0, 0, 0.45);
-  border: 2px solid #aab4f0;
-  border-radius: 6px;
+  height: 16px;
+  background: rgba(90,122,153,0.18);
+  border: 1px solid var(--pf-staff);
+  border-radius: 1px;
   overflow: hidden;
-  margin: 4px 0 14px;
+  margin: 6px 0 16px;
 }
-
 #pianoforte .pf-vuBar {
   height: 100%;
   width: 0%;
-  background: #ef476f;
-  transition: width 0.06s linear, background 0.1s;
+  background: var(--pf-note);
+  transition: width 0.06s linear, background 0.12s;
 }
 
-#pianoforte .pf-calibReadout {
-  font-size: 14px;
-  line-height: 1.6;
-  color: #ffffff;
-  margin-bottom: 20px;
+#pianoforte .pf-readout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 22px;
 }
-
-#pianoforte .pf-calibReadout span {
-  color: #ffd166;
-  font-weight: bold;
+#pianoforte .pf-readout-note {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: 34px;
+  font-weight: 600;
+  color: var(--pf-note);
+  line-height: 1;
+  transition: color 0.1s;
 }
+#pianoforte .pf-readout-meta {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--pf-inkdim);
+}
+#pianoforte .pf-readout-meta span { color: var(--pf-ink); }
 
-/* righe slider */
 #pianoforte .pf-sliderRow {
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: 85%;
-  max-width: 340px;
-  margin: 6px 0;
-  font-size: 13px;
+  gap: 12px;
+  width: 88%;
+  max-width: 360px;
+  margin: 7px 0;
+  font-size: 14px;
 }
-
 #pianoforte .pf-sliderRow label {
-  flex: 0 0 96px;
+  flex: 0 0 108px;
   text-align: right;
-  color: #aab4f0;
+  font-style: italic;
+  color: var(--pf-inkdim);
 }
-
 #pianoforte .pf-slider {
   flex: 1 1 auto;
   -webkit-appearance: none;
   appearance: none;
-  height: 6px;
-  border-radius: 999px;
-  background: #333a5c;
+  height: 1px;
+  background: var(--pf-staff);
   outline: none;
 }
-
 #pianoforte .pf-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 22px;
-  height: 22px;
+  width: 16px; height: 16px;
   border-radius: 50%;
-  background: #06d6a0;
-  border: 2px solid #048a67;
+  background: var(--pf-bg);
+  border: 1.5px solid var(--pf-gold);
   cursor: pointer;
+  box-shadow: 0 0 10px rgba(212,168,67,0.3);
 }
-
 #pianoforte .pf-slider::-moz-range-thumb {
-  width: 22px;
-  height: 22px;
+  width: 16px; height: 16px;
   border-radius: 50%;
-  background: #06d6a0;
-  border: 2px solid #048a67;
+  background: var(--pf-bg);
+  border: 1.5px solid var(--pf-gold);
   cursor: pointer;
 }
-
 #pianoforte .pf-sliderVal {
-  flex: 0 0 48px;
+  flex: 0 0 52px;
   text-align: left;
-  color: #ffd166;
-  font-weight: bold;
+  color: var(--pf-gold);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Debug ---------- */
+#pianoforte #debugPanel {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 20;
+  background: rgba(13,27,42,0.8);
+  border: 1px solid var(--pf-staff);
+  color: var(--pf-note);
+  font-family: 'EB Garamond', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  padding: 8px 11px;
+  border-radius: 2px;
+  pointer-events: none;
+  max-width: 72%;
+  text-align: left;
+}
+
+/* schermi bassi */
+@media (max-height: 600px) {
+  #pianoforte .pf-overlay { padding-top: 20px; padding-bottom: 64px; }
+  #pianoforte .pf-subtitle { margin-bottom: 18px; }
+  #pianoforte .pf-phoneIcon { font-size: 58px; }
+  #pianoforte .pf-sliderRow { margin: 5px 0; }
 }

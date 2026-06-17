@@ -80,6 +80,22 @@
   };
   let CURRENT_DIFFICULTY = "facile";
 
+  // --- PALETTE "Notturno del copista" ---
+  // Manoscritto musicale visto di notte: carta blu-notte invecchiata,
+  // inchiostro avorio, righi sbiaditi, note come gocce d'inchiostro ciano.
+  const PAL = {
+    bg:     "#0d1b2a",  // blu notte profondo (fondo carta)
+    bg2:    "#13243a",  // carta più chiara (pannelli)
+    ink:    "#e8dcc0",  // inchiostro avorio invecchiato (testo)
+    inkDim: "#9a8f76",  // inchiostro sbiadito
+    staff:  "#5a7a99",  // righi blu polvere
+    note:   "#7fd4e8",  // ciano luminoso (la nota / inchiostro fresco)
+    accent: "#b794d4",  // viola ametista (bacchetta, accenti)
+    gold:   "#d4a843",  // oro spento (chiave, ornamenti)
+    err:    "#c1666b",  // rosso mattone smorzato (errore)
+    frac:   "#1a2c44",  // frac scuro del direttore
+  };
+
   // Note (MIDI) per la sezione A.
   const WHITE_MIDIS = [60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83];
   const CHROMATIC_MIDIS = [];
@@ -105,6 +121,7 @@
   // schermata di calibrazione microfono
   let elCalibScreen, elCalibVu, elCalibNote, elCalibRms, elCalibClarity;
   let elRmsSlider, elRmsVal, elClaritySlider, elClarityVal, elCalibContinue;
+  let elOnsetSlider, elOnsetVal;
   let calibRafId = null; // loop dedicato alla calibrazione (separato dal gioco)
 
   let initialized = false; // per rendere avviaPianoforteInit idempotente
@@ -112,6 +129,25 @@
   // audio
   let audioCtx = null, analyser = null, micStream = null;
   let timeBuf = null, lastDetected = null, lastRms = 0;
+
+  // --- Rilevamento ATTACCO (onset) per evitare i falsi trigger del decay ---
+  // Il pianoforte ha una coda lunga: dopo che suoni una nota, il suono resta
+  // sopra soglia per 1-2s mentre decade. Senza onset detection, quel decay
+  // verrebbe letto come una "nuova" nota (di solito quella precedente, che è
+  // ancora la più forte) e darebbe falsi errori. Quindi una nota conta SOLO
+  // quando l'energia RISALE bruscamente (nuovo attacco), non mentre cala.
+  let prevRms = 0;            // RMS del frame precedente
+  let armed = true;           // pronto ad accettare un nuovo attacco
+  let refractoryUntil = 0;    // timestamp fino a cui ignoro nuovi attacchi
+  let stableMidi = -1;        // ultima nota letta (per la conferma di stabilità)
+  let stableCount = 0;        // per quanti frame consecutivi è stabile
+  // soglie onset (tarabili): quanto deve salire l'RMS per contare un attacco
+  let ONSET_RISE = 0.010;     // incremento minimo di RMS tra due frame
+  const REFRACTORY_MS = 130;  // tempo morto dopo un attacco accettato
+  const STABLE_FRAMES = 2;    // frame di conferma del pitch prima di accettare
+  const REARM_FACTOR = 0.55;  // ci si "riarma" quando l'RMS scende sotto questo
+                              // frazione del picco recente
+  let recentPeak = 0;         // picco di RMS recente (per la soglia di riarmo)
 
   // sensori
   let orientationHandler = null, tiltOkSince = 0, tiltGatePassed = false;
@@ -146,8 +182,6 @@
   const CONDUCT_TIME = 0.45;
   const STUMBLE_TIME = 0.55;
   let flashErr = 0;          // breve flash rosso su errore
-
-  let noteReleased = true;   // edge detection: una nota va rilasciata prima della prossima
 
   /* =====================================================================
      (1) SETUP AUDIO + PITCH DETECTION
@@ -244,15 +278,56 @@
   function pollAudio() {
     if (!analyser) return;
     analyser.getFloatTimeDomainData(timeBuf);
-    lastRms = computeRms(timeBuf);
-    if (lastRms < RMS_THRESHOLD) { lastDetected = null; noteReleased = true; return; }
+    const rms = computeRms(timeBuf);
+    const now = performance.now();
 
+    // decadimento del picco recente (per la soglia di riarmo)
+    recentPeak = Math.max(rms, recentPeak * 0.92);
+
+    // silenzio: azzera tutto e riarma
+    if (rms < RMS_THRESHOLD) {
+      lastDetected = null;
+      armed = true;
+      stableMidi = -1; stableCount = 0;
+      prevRms = rms; lastRms = rms;
+      return;
+    }
+
+    // pitch detection
     const { freq, clarity } = autoCorrelate(timeBuf, audioCtx.sampleRate);
-    if (freq <= 0) { lastDetected = null; return; }
+    if (freq <= 0) {
+      // suono presente ma pitch non affidabile: non aggiorno la nota,
+      // ma aggiorno comunque l'energia per l'onset
+      prevRms = rms; lastRms = rms;
+      return;
+    }
 
     const midi = Math.round(freqToMidi(freq));
     const note = midiToNote(midi);
-    lastDetected = { midi, name: note.name, octave: note.octave, pc: note.pc, freq, rms: lastRms, clarity };
+
+    // conferma di stabilità: il pitch deve ripetersi per N frame.
+    // Questo scarta i transienti d'attacco (pitch ballerino nei primi ms).
+    if (midi === stableMidi) stableCount++;
+    else { stableMidi = midi; stableCount = 1; }
+
+    // --- rilevamento dell'attacco ---
+    // riarmo: quando l'energia è scesa abbastanza sotto il picco recente,
+    // sono di nuovo pronto ad accettare un attacco
+    if (!armed && rms < recentPeak * REARM_FACTOR) armed = true;
+
+    // un onset è: salita netta di RMS, mentre sono "armato" e fuori dal
+    // periodo refrattario, con pitch confermato stabile
+    const rising = (rms - prevRms) >= ONSET_RISE;
+    let isOnset = false;
+    if (armed && rising && now >= refractoryUntil && stableCount >= STABLE_FRAMES) {
+      isOnset = true;
+      armed = false;
+      refractoryUntil = now + REFRACTORY_MS;
+    }
+
+    lastDetected = { midi, name: note.name, octave: note.octave, pc: note.pc,
+                     freq, rms, clarity, isOnset };
+    prevRms = rms; lastRms = rms;
   }
 
   function noteMatches(detectedMidi, targetMidi) {
@@ -351,53 +426,73 @@
   }
 
   function render() {
-    ctx.fillStyle = "#0e1230";
-    ctx.fillRect(0, 0, W, H);
     drawBackground();
     drawStaff();
     drawNotes();
     drawRunner();
     drawHud();
-    // breve flash rosso su errore
+    // velo rosso smorzato sull'errore
     if (flashErr > 0) {
-      ctx.fillStyle = "rgba(239,71,111," + (flashErr * 0.35).toFixed(3) + ")";
+      ctx.fillStyle = "rgba(193,102,107," + (flashErr * 0.28).toFixed(3) + ")";
       ctx.fillRect(0, 0, W, H);
     }
   }
 
+  // Fondo: carta di manoscritto blu-notte con vignettatura a lume di candela.
   function drawBackground() {
-    ctx.fillStyle = "#1b2350";
-    for (let i = 0; i < 30; i++) {
-      const x = (i * 53) % W;
-      const y = (i * 37) % (H * 0.5);
-      ctx.fillRect(Math.round(x), Math.round(y), 2, 2);
+    ctx.fillStyle = PAL.bg;
+    ctx.fillRect(0, 0, W, H);
+
+    // alone caldo di candela attorno al direttore (luce radente)
+    const g = ctx.createRadialGradient(runnerX, staffY - lineGap * 2, 10,
+                                       runnerX, staffY - lineGap * 2, W * 0.7);
+    g.addColorStop(0, "rgba(212,168,67,0.10)");
+    g.addColorStop(1, "rgba(212,168,67,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // macchie d'invecchiamento della carta (deterministiche, ferme)
+    ctx.fillStyle = "rgba(154,143,118,0.05)";
+    for (let i = 0; i < 22; i++) {
+      const x = (i * 97 + 40) % W;
+      const y = (i * 131 + 30) % H;
+      const r = 8 + (i % 5) * 6;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
     }
-    ctx.fillStyle = "#161a3a";
-    ctx.fillRect(0, staffY + lineGap * 3, W, H);
+
+    // vignettatura ai bordi
+    const v = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.75);
+    v.addColorStop(0, "rgba(0,0,0,0)");
+    v.addColorStop(1, "rgba(0,0,0,0.45)");
+    ctx.fillStyle = v;
+    ctx.fillRect(0, 0, W, H);
   }
 
   function drawStaff() {
-    ctx.strokeStyle = "#aab4f0";
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = PAL.staff;
+    ctx.lineWidth = 1.5;
+    ctx.globalAlpha = 0.85;
     for (let i = 0; i < 5; i++) {
       const y = staffY - i * lineGap;
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
     }
-    drawTrebleClef(34, staffY);
+    ctx.globalAlpha = 1;
+    drawTrebleClef(40, staffY);
   }
 
+  // Chiave di violino vergata a inchiostro oro, stilizzata ma elegante.
   function drawTrebleClef(x, bottomY) {
     ctx.save();
-    ctx.strokeStyle = "#ffd166"; ctx.lineWidth = 3; ctx.lineCap = "round";
+    ctx.strokeStyle = PAL.gold; ctx.lineWidth = 3.2; ctx.lineCap = "round"; ctx.lineJoin = "round";
     const topY = bottomY - lineGap * 4, midY = (topY + bottomY) / 2;
     ctx.beginPath();
-    ctx.moveTo(x, bottomY + lineGap * 0.8);
-    ctx.bezierCurveTo(x + 14, midY + 6, x - 14, midY - 6, x, topY - 6);
-    ctx.bezierCurveTo(x + 12, topY + 6, x + 16, midY, x, midY + 4);
-    ctx.bezierCurveTo(x - 14, midY + 8, x - 6, bottomY - 2, x + 6, bottomY - 6);
+    ctx.moveTo(x, bottomY + lineGap * 1.1);
+    ctx.bezierCurveTo(x + 16, midY + 8, x - 16, midY - 8, x, topY - 8);
+    ctx.bezierCurveTo(x + 14, topY + 8, x + 19, midY, x, midY + 5);
+    ctx.bezierCurveTo(x - 17, midY + 10, x - 7, bottomY - 2, x + 7, bottomY - 8);
     ctx.stroke();
-    ctx.fillStyle = "#ffd166";
-    ctx.beginPath(); ctx.arc(x + 2, bottomY + lineGap * 0.6, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = PAL.gold;
+    ctx.beginPath(); ctx.arc(x + 2, bottomY + lineGap * 0.9, 4.5, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
   }
 
@@ -409,60 +504,91 @@
     return runnerX + (index + shiftAnim) * slotGap;
   }
 
+  // Mostra SOLO la nota corrente (slot 0). Durante lo scorrimento si vede
+  // anche quella in arrivo (slot 1 che scivola verso 0), con dissolvenza,
+  // così l'avanzamento è leggibile senza svelare in anticipo le note future.
   function drawNotes() {
-    for (let i = 0; i < notes.length; i++) {
+    const maxIndex = shiftAnim > 0 ? 1 : 0;
+    for (let i = 0; i <= maxIndex && i < notes.length; i++) {
       const n = notes[i];
       const x = slotX(i);
-      if (x > W + 40) continue; // fuori schermo a destra
-      const isTarget = (i === 0);
-      if (n.type === "note") {
-        drawNoteHead(x, midiToStaffY(n.midi), n.midi, isTarget);
-        drawLedgerLines(x, n.midi);
-        if (cfg.showName) drawNoteLabel(x, midiToStaffY(n.midi), n.midi);
-      } else { // accordo
-        for (let k = 0; k < n.midis.length; k++) {
-          drawNoteHead(x, midiToStaffY(n.midis[k]), n.midis[k], isTarget && k < n.progress);
-          drawLedgerLines(x, n.midis[k]);
-        }
-        if (cfg.showName) {
-          const topM = Math.max(...n.midis);
-          ctx.fillStyle = "#ffffff"; ctx.font = "bold 13px monospace"; ctx.textAlign = "center";
-          ctx.fillText(n.label, x, midiToStaffY(topM) - 26);
-          ctx.font = "11px monospace";
-          const seq = n.midis.map((m, j) => (isTarget && j < n.progress ? "•" : midiToNote(m).name)).join(" ");
-          ctx.fillText(seq, x, midiToStaffY(topM) - 12);
-        }
-      }
+      // opacità: la corrente piena; quella in arrivo sfuma dentro durante lo shift
+      let alpha = 1;
+      if (i === 0) alpha = shiftAnim > 0 ? (1 - shiftAnim) * 0.5 + 0.5 : 1; // esce/affievolisce
+      if (i === 1) alpha = 1 - shiftAnim;                                    // entra
+      drawNoteEntity(n, x, i === 0 && shiftAnim === 0, alpha);
     }
   }
 
+  function drawNoteEntity(n, x, isTarget, alpha) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+    if (n.type === "note") {
+      drawLedgerLines(x, n.midi);
+      drawNoteHead(x, midiToStaffY(n.midi), n.midi, isTarget);
+      if (cfg.showName) drawNoteLabel(x, midiToStaffY(n.midi), n.midi);
+    } else { // accordo: pila di teste
+      for (let k = 0; k < n.midis.length; k++) {
+        drawLedgerLines(x, n.midis[k]);
+        drawNoteHead(x, midiToStaffY(n.midis[k]), n.midis[k], isTarget && k < n.progress);
+      }
+      if (cfg.showName) {
+        const topM = Math.max(...n.midis);
+        ctx.fillStyle = PAL.ink;
+        ctx.font = "italic 15px 'EB Garamond', Georgia, serif";
+        ctx.textAlign = "center";
+        ctx.fillText(n.label, x, midiToStaffY(topM) - 28);
+        ctx.font = "13px 'EB Garamond', Georgia, serif";
+        const seq = n.midis.map((m, j) => (isTarget && j < n.progress ? "•" : midiToNote(m).name)).join(" ");
+        ctx.fillStyle = PAL.note;
+        ctx.fillText(seq, x, midiToStaffY(topM) - 12);
+      }
+    }
+    ctx.restore();
+  }
+
+  // Testa di nota a "goccia d'inchiostro" con leggero alone.
   function drawNoteHead(x, y, midi, highlighted) {
     ctx.save();
-    ctx.fillStyle = highlighted ? "#06d6a0" : "#ef476f";
-    ctx.beginPath(); ctx.ellipse(x, y, 9, 7, -0.3, 0, Math.PI * 2); ctx.fill();
-    ctx.lineWidth = 2; ctx.strokeStyle = "#10122b"; ctx.stroke();
-    ctx.strokeStyle = highlighted ? "#06d6a0" : "#ef476f"; ctx.lineWidth = 3;
+    const col = highlighted ? PAL.note : PAL.inkDim;
+    // alone luminoso solo sulla nota attiva
+    if (highlighted) {
+      ctx.shadowColor = PAL.note;
+      ctx.shadowBlur = 14;
+    }
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.ellipse(x, y, 9, 7, -0.35, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+    // gambo a inchiostro
+    ctx.strokeStyle = col; ctx.lineWidth = 2.4; ctx.lineCap = "round";
     ctx.beginPath();
     const midLineY = staffY - lineGap * 2;
     if (y > midLineY) { ctx.moveTo(x + 8, y - 1); ctx.lineTo(x + 8, y - lineGap * 3.2); }
     else { ctx.moveTo(x - 8, y + 1); ctx.lineTo(x - 8, y + lineGap * 3.2); }
     ctx.stroke();
+    // alterazione (♯) accanto alla testa
     const pc = ((midi % 12) + 12) % 12;
     if (PC_TO_DIATONIC[pc].acc === 1) {
-      ctx.fillStyle = "#ffd166"; ctx.font = "bold 16px monospace"; ctx.textAlign = "right";
-      ctx.fillText("#", x - 11, y + 5);
+      ctx.fillStyle = PAL.gold;
+      ctx.font = "16px 'EB Garamond', Georgia, serif";
+      ctx.textAlign = "right";
+      ctx.fillText("♯", x - 11, y + 5);
     }
     ctx.restore();
   }
 
   function drawNoteLabel(x, y, midi) {
-    ctx.fillStyle = "#ffffff"; ctx.font = "bold 14px monospace"; ctx.textAlign = "center";
-    ctx.fillText(midiToNote(midi).name, x, y - 22);
+    ctx.save();
+    ctx.fillStyle = PAL.ink;
+    ctx.font = "italic 20px 'Cormorant Garamond', Georgia, serif";
+    ctx.textAlign = "center";
+    ctx.fillText(midiToNote(midi).name, x, y - 24);
+    ctx.restore();
   }
 
   function drawLedgerLines(x, midi) {
     const y = midiToStaffY(midi);
-    ctx.strokeStyle = "#aab4f0"; ctx.lineWidth = 2;
+    ctx.strokeStyle = PAL.staff; ctx.lineWidth = 1.5;
     const topLineY = staffY - lineGap * 4, bottomLineY = staffY, half = lineGap / 2;
     for (let ly = bottomLineY + lineGap; ly <= y + half - 1; ly += lineGap) {
       ctx.beginPath(); ctx.moveTo(x - 14, ly); ctx.lineTo(x + 14, ly); ctx.stroke();
@@ -503,95 +629,103 @@
     ctx.translate(x, y);
     ctx.rotate(lean);
 
-    const c = "#06d6a0", dark = "#048a67", skin = "#ffd9a6";
+    const skin = "#d9b896";
 
-    // gambe
-    ctx.fillStyle = dark;
+    // gambe (inchiostro scuro)
+    ctx.fillStyle = PAL.frac;
     if (runnerAnim === "stumble") {
-      ctx.fillRect(-9, -6, 6, 8); ctx.fillRect(3, -6, 6, 6); // gambe scomposte
+      ctx.fillRect(-9, -6, 6, 8); ctx.fillRect(3, -6, 6, 6);
     } else {
       ctx.fillRect(-8, -6, 6, 7); ctx.fillRect(2, -6, 6, 7);
     }
-    // corpo (frac da direttore)
-    ctx.fillStyle = "#10122b";
+    // frac da direttore
+    ctx.fillStyle = PAL.frac;
     ctx.fillRect(-9, -23, 18, 17);
-    // camicia bianca al centro
-    ctx.fillStyle = "#ffffff";
+    // sparato della camicia (avorio)
+    ctx.fillStyle = PAL.ink;
     ctx.fillRect(-3, -22, 6, 12);
+    // papillon ametista
+    ctx.fillStyle = PAL.accent;
+    ctx.fillRect(-3, -22, 6, 3);
     // testa
     ctx.fillStyle = skin;
     ctx.fillRect(-6, -35, 12, 12);
     // capelli
-    ctx.fillStyle = "#3a2a18";
+    ctx.fillStyle = "#2a3142";
     ctx.fillRect(-6, -35, 12, 4);
-    // occhio (guarda avanti, verso la nota)
-    ctx.fillStyle = "#10122b";
+    // occhio
+    ctx.fillStyle = PAL.frac;
     ctx.fillRect(3, -31, 2, 3);
 
-    // braccio sinistro (dietro)
-    ctx.fillStyle = "#10122b";
+    // braccio sinistro
+    ctx.fillStyle = PAL.frac;
     ctx.fillRect(-12, -20, 4, 8);
 
-    // braccio destro che impugna la BACCHETTA (verso la nota)
+    // braccio destro con la BACCHETTA
     ctx.save();
-    ctx.translate(8, -19);          // spalla destra
+    ctx.translate(8, -19);
     ctx.rotate(batonAngle);
-    // avambraccio
-    ctx.fillStyle = "#10122b";
+    ctx.fillStyle = PAL.frac;
     ctx.fillRect(0, -2, 9, 4);
-    // mano
     ctx.fillStyle = skin;
     ctx.fillRect(8, -2, 4, 4);
-    // bacchetta bianca
-    ctx.strokeStyle = "#fff8e7";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(11, 0);
-    ctx.lineTo(30, 0);
-    ctx.stroke();
-    // punta della bacchetta
-    ctx.fillStyle = "#ffd166";
-    ctx.beginPath(); ctx.arc(30, 0, 2.5, 0, Math.PI * 2); ctx.fill();
+    // bacchetta: asta avorio con punta ametista luminosa
+    ctx.strokeStyle = PAL.ink; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(11, 0); ctx.lineTo(30, 0); ctx.stroke();
+    ctx.shadowColor = PAL.accent; ctx.shadowBlur = 8;
+    ctx.fillStyle = PAL.accent;
+    ctx.beginPath(); ctx.arc(30, 0, 2.6, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
     ctx.restore();
 
     ctx.restore();
 
-    // scintille sul colpo di bacchetta riuscito
+    // scintille d'inchiostro ciano sul colpo riuscito
     if (runnerAnim === "conduct") {
       const t = Math.min(1, runnerAnimT / CONDUCT_TIME);
       const sparkX = runnerX + 34, sparkY = groundY - 18;
-      ctx.fillStyle = "rgba(255,209,102," + (1 - t).toFixed(2) + ")";
-      for (let s = 0; s < 5; s++) {
-        const a = (s / 5) * Math.PI * 2 + t * 3;
-        const r = 6 + t * 16;
-        ctx.fillRect(Math.round(sparkX + Math.cos(a) * r), Math.round(sparkY + Math.sin(a) * r), 3, 3);
+      ctx.fillStyle = "rgba(127,212,232," + (1 - t).toFixed(2) + ")";
+      for (let s = 0; s < 6; s++) {
+        const a = (s / 6) * Math.PI * 2 + t * 3;
+        const r = 6 + t * 18;
+        ctx.fillRect(Math.round(sparkX + Math.cos(a) * r), Math.round(sparkY + Math.sin(a) * r), 2.5, 2.5);
       }
     }
   }
 
   function drawHud() {
-    ctx.fillStyle = "#ffffff"; ctx.font = "bold 18px monospace"; ctx.textAlign = "left";
-    ctx.fillText("Punti: " + score, 12, 28);
+    // punteggio (serif, in alto a sinistra)
+    ctx.fillStyle = PAL.ink;
+    ctx.font = "20px 'Cormorant Garamond', Georgia, serif";
+    ctx.textAlign = "left";
+    ctx.fillText(score + (score === 1 ? " battuta" : " battute"), 16, 32);
 
-    // vite a forma di cuoricino pixel, in alto a destra
+    // vite come gocce d'inchiostro (♪), in alto a destra
     ctx.textAlign = "right";
-    let hearts = "";
-    for (let i = 0; i < MAX_LIVES; i++) hearts += (i < lives ? "♥" : "·");
-    ctx.fillStyle = "#ef476f";
-    ctx.fillText(hearts, W - 12, 28);
+    let lifeX = W - 16;
+    for (let i = MAX_LIVES - 1; i >= 0; i--) {
+      ctx.fillStyle = i < lives ? PAL.accent : "rgba(154,143,118,0.3)";
+      ctx.font = "20px 'EB Garamond', Georgia, serif";
+      ctx.fillText("♪", lifeX, 32);
+      lifeX -= 22;
+    }
 
-    // sezione (piccola, sotto le vite)
-    ctx.fillStyle = "#6b76b8"; ctx.font = "12px monospace";
-    ctx.fillText("Sez. " + section, W - 12, 46);
+    // sezione (eyebrow discreto)
+    ctx.fillStyle = PAL.inkDim;
+    ctx.font = "italic 13px 'EB Garamond', Georgia, serif";
+    ctx.textAlign = "right";
+    ctx.fillText(section === "A" ? "note sciolte" : "arpeggi", W - 16, 52);
 
-    // nota target corrente = notes[0]
+    // nota target corrente (al centro, sopra il rigo)
     const target = notes[0];
     if (target && shiftAnim === 0) {
-      ctx.textAlign = "center"; ctx.fillStyle = "#ffd166"; ctx.font = "bold 16px monospace";
+      ctx.textAlign = "center";
+      ctx.fillStyle = PAL.gold;
+      ctx.font = "italic 17px 'Cormorant Garamond', Georgia, serif";
       let txt;
-      if (target.type === "note") txt = "Suona: " + midiToNote(target.midi).name;
-      else txt = "Arpeggia: " + target.midis.slice(target.progress).map(m => midiToNote(m).name).join(" → ");
-      ctx.fillText(txt, W / 2, 52);
+      if (target.type === "note") txt = midiToNote(target.midi).name;
+      else txt = target.midis.slice(target.progress).map(m => midiToNote(m).name).join(" · ");
+      ctx.fillText(txt, W / 2, 30);
     }
   }
 
@@ -644,34 +778,30 @@
 
   function handleNoteInput() {
     if (!lastDetected) return;
-    if (shiftAnim > 0) return;        // mentre la coda scorre, ignora input
+    if (shiftAnim > 0) return;            // mentre la coda scorre, ignora input
+    // accetta SOLO un attacco nuovo: il decay della nota precedente non conta
+    if (!lastDetected.isOnset) return;
+
     const target = notes[0];
     if (!target) return;
-    if (!noteReleased) return;        // serve un "rilascio" tra due note
 
     if (target.type === "note") {
-      if (noteMatches(lastDetected.midi, target.midi)) {
-        triggerSuccess();
-      } else {
-        triggerError();
-      }
-      noteReleased = false;
-    } else { // accordo arpeggiato
+      if (noteMatches(lastDetected.midi, target.midi)) triggerSuccess();
+      else triggerError();
+    } else { // accordo arpeggiato: ogni nota richiede un attacco distinto
       const expected = target.midis[target.progress];
       if (noteMatches(lastDetected.midi, expected)) {
         target.progress++;
-        noteReleased = false;
         if (target.progress >= target.midis.length) {
           triggerSuccess();
         } else {
-          // nota intermedia giusta: piccolo cenno di bacchetta, niente shift
+          // nota intermedia giusta: cenno di bacchetta, niente shift
           runnerAnim = "conduct"; runnerAnimT = 0;
         }
       } else {
         // nota sbagliata nell'arpeggio: errore e ricomincia l'accordo
         target.progress = 0;
         triggerError();
-        noteReleased = false;
       }
     }
   }
@@ -720,7 +850,9 @@
   function resetGame() {
     cfg = DIFFICULTIES[CURRENT_DIFFICULTY];
     score = 0; lives = MAX_LIVES; section = "A";
-    noteReleased = true;
+    // reset stato onset/audio
+    armed = true; refractoryUntil = 0; stableMidi = -1; stableCount = 0;
+    prevRms = 0; recentPeak = 0;
     shiftAnim = 0; runnerAnim = "idle"; runnerAnimT = 0; flashErr = 0;
     // riempi la coda con VISIBLE_SLOTS note
     notes = [];
@@ -798,6 +930,14 @@
         elClarityVal.textContent = CLARITY_MIN.toFixed(2);
       };
     }
+    if (elOnsetSlider) {
+      elOnsetSlider.value = ONSET_RISE;
+      elOnsetVal.textContent = ONSET_RISE.toFixed(3);
+      elOnsetSlider.oninput = () => {
+        ONSET_RISE = parseFloat(elOnsetSlider.value);
+        elOnsetVal.textContent = ONSET_RISE.toFixed(3);
+      };
+    }
     if (elCalibContinue) {
       elCalibContinue.onclick = () => {
         stopCalibration();
@@ -820,21 +960,26 @@
   }
 
   // Aggiorna la barra VU e i readout durante la calibrazione.
+  let calibOnsetFlash = 0;
   function renderCalibration() {
     if (!elCalibVu) return;
-    // barra VU: mappa l'RMS (0..~0.3 tipico) su 0..100%
     const pct = Math.min(100, (lastRms / 0.3) * 100);
     elCalibVu.style.width = pct.toFixed(0) + "%";
-    // colore: rosso sotto soglia, verde sopra (così vedi subito se "passa")
     const passing = lastRms >= RMS_THRESHOLD;
-    elCalibVu.style.background = passing ? "#06d6a0" : "#ef476f";
+    elCalibVu.style.background = passing ? PAL.note : PAL.err;
+
+    // quando scatta un ATTACCO, lampeggia (feedback "colpo registrato")
+    if (lastDetected && lastDetected.isOnset) calibOnsetFlash = 1;
+    calibOnsetFlash = Math.max(0, calibOnsetFlash - 0.05);
 
     if (lastDetected) {
       elCalibNote.textContent = lastDetected.name + lastDetected.octave;
       elCalibClarity.textContent = lastDetected.clarity.toFixed(2);
+      // la nota lampeggia in oro quando è un attacco appena rilevato
+      elCalibNote.style.color = calibOnsetFlash > 0.3 ? PAL.gold : PAL.note;
     } else {
       elCalibNote.textContent = "—";
-      // mostra comunque la clarity grezza se il volume passa ma la nota no
+      elCalibNote.style.color = PAL.inkDim;
       elCalibClarity.textContent = "0.00";
     }
     elCalibRms.textContent = lastRms.toFixed(3);
@@ -852,53 +997,61 @@
         <canvas id="gameCanvas"></canvas>
 
         <div id="startScreen" class="pf-overlay">
-          <h1 class="pf-title">IL PIANOFORTE</h1>
-          <p class="pf-subtitle">Sei il direttore d'orchestra.<br>Suona la nota giusta per dirigerla.</p>
-          <button id="startBtn" class="pf-bigBtn">Avvia</button>
-          <p class="pf-hint">Servono microfono e sensori del telefono.</p>
+          <p class="pf-eyebrow">Sala 131 · il Pianoforte</p>
+          <h1 class="pf-title">Il Direttore</h1>
+          <div class="pf-rule"></div>
+          <p class="pf-subtitle">Davanti a te, una nota sul pentagramma.<br>Suonala al pianoforte per dirigerla.<br>Sbaglia, e il direttore inciampa.</p>
+          <button id="startBtn" class="pf-bigBtn">Sali sul podio</button>
+          <p class="pf-hint">Useremo microfono e sensori del telefono.</p>
           <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna indietro</button>
         </div>
 
         <div id="calibScreen" class="pf-overlay hidden">
-          <h2 class="pf-title">PROVA MICROFONO</h2>
-          <p class="pf-subtitle">Suona qualche nota sul pianoforte.<br>Controlla che il livello salga e che compaia la nota.</p>
+          <p class="pf-eyebrow">Accordatura</p>
+          <h2 class="pf-title pf-title--sm">Prova il microfono</h2>
+          <div class="pf-rule"></div>
+          <p class="pf-subtitle">Suona qualche nota. La barra deve accendersi<br>e la nota deve illuminarsi a ogni tocco.</p>
 
-          <div class="pf-vuWrap">
-            <div id="calibVu" class="pf-vuBar"></div>
-          </div>
-          <div class="pf-calibReadout">
-            Nota: <span id="calibNote">—</span><br>
-            Volume (RMS): <span id="calibRms">0.000</span> ·
-            Qualità: <span id="calibClarity">0.00</span>
+          <div class="pf-vuWrap"><div id="calibVu" class="pf-vuBar"></div></div>
+          <div class="pf-readout">
+            <span id="calibNote" class="pf-readout-note">—</span>
+            <span class="pf-readout-meta">vol <span id="calibRms">0.000</span> · qualità <span id="calibClarity">0.00</span></span>
           </div>
 
           <div class="pf-sliderRow">
-            <label>Soglia volume</label>
+            <label>Volume minimo</label>
             <input id="rmsSlider" class="pf-slider" type="range" min="0.001" max="0.05" step="0.001">
             <span id="rmsVal" class="pf-sliderVal">0.010</span>
           </div>
           <div class="pf-sliderRow">
-            <label>Soglia qualità</label>
+            <label>Qualità minima</label>
             <input id="claritySlider" class="pf-slider" type="range" min="0.50" max="0.95" step="0.01">
             <span id="clarityVal" class="pf-sliderVal">0.75</span>
           </div>
-          <p class="pf-hint">Consigliato: volume 0.010 · qualità 0.75. Abbassa se non rileva, alza se rileva nel silenzio.</p>
+          <div class="pf-sliderRow">
+            <label>Sensibilità tocco</label>
+            <input id="onsetSlider" class="pf-slider" type="range" min="0.003" max="0.05" step="0.001">
+            <span id="onsetVal" class="pf-sliderVal">0.010</span>
+          </div>
+          <p class="pf-hint">Se non rileva, abbassa volume e qualità. Se conta due volte la stessa nota, alza la sensibilità tocco.</p>
 
           <button id="calibContinue" class="pf-bigBtn">Continua</button>
           <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna indietro</button>
         </div>
 
         <div id="tiltScreen" class="pf-overlay hidden">
-          <div class="pf-phoneIcon">📱</div>
+          <div class="pf-phoneIcon">𝄞</div>
           <p id="tiltMsg" class="pf-tiltMsg">Appoggia il telefono in orizzontale sul pianoforte</p>
           <button id="readyBtn" class="pf-bigBtn hidden">Sono pronto</button>
           <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna indietro</button>
         </div>
 
         <div id="gameOverScreen" class="pf-overlay hidden">
-          <h2 class="pf-title pf-gameover">GAME OVER</h2>
-          <p class="pf-subtitle">Punteggio: <span id="finalScore">0</span></p>
-          <button id="restartBtn" class="pf-bigBtn">Ricomincia</button>
+          <p class="pf-eyebrow">Fine del concerto</p>
+          <h2 class="pf-title pf-title--sm">Sipario</h2>
+          <div class="pf-rule"></div>
+          <p class="pf-subtitle">Hai diretto <span id="finalScore">0</span> battute.</p>
+          <button id="restartBtn" class="pf-bigBtn">Da capo</button>
           <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna indietro</button>
         </div>
 
@@ -931,6 +1084,8 @@
     elRmsVal = document.getElementById("rmsVal");
     elClaritySlider = document.getElementById("claritySlider");
     elClarityVal = document.getElementById("clarityVal");
+    elOnsetSlider = document.getElementById("onsetSlider");
+    elOnsetVal = document.getElementById("onsetVal");
     elCalibContinue = document.getElementById("calibContinue");
 
     if (DEBUG && elDebug) elDebug.classList.remove("hidden");
