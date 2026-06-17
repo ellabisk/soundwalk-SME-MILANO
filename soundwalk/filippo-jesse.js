@@ -115,7 +115,7 @@
   let canvas, ctx;
   let DPR = 1, W = 0, H = 0;
 
-  let elStart, elStartBtn, elReadyBtn, elTiltMsg, elTiltScreen;
+  let elStart, elStartBtn;
   let elGameOver, elRestartBtn, elFinalScore, elDebug;
 
   // schermata di calibrazione microfono
@@ -133,29 +133,30 @@
   // --- Rilevamento ATTACCO (onset) per evitare i falsi trigger del decay ---
   // Il pianoforte ha una coda lunga: dopo che suoni una nota, il suono resta
   // sopra soglia per 1-2s mentre decade. Senza onset detection, quel decay
-  // verrebbe letto come una "nuova" nota (di solito quella precedente, che è
-  // ancora la più forte) e darebbe falsi errori. Quindi una nota conta SOLO
-  // quando l'energia RISALE bruscamente (nuovo attacco), non mentre cala.
-  let prevRms = 0;            // RMS del frame precedente
+  // verrebbe letto come una "nuova" nota e darebbe falsi errori.
+  //
+  // MODELLO arm/fire (robusto sul pianoforte, il cui attacco è rapidissimo):
+  //   - "armed" = pronto ad accettare una nota nuova.
+  //   - si SPARA un onset quando, essendo armati, l'RMS supera la soglia di
+  //     volume con pitch confermato stabile.
+  //   - ci si RIARMA solo dopo che l'RMS è sceso sotto una frazione del picco
+  //     recente (il tasto è stato "rilasciato"/sta decadendo) oppure dopo
+  //     silenzio. Così il plateau e la coda della stessa nota NON rispar­ano.
   let armed = true;           // pronto ad accettare un nuovo attacco
   let refractoryUntil = 0;    // timestamp fino a cui ignoro nuovi attacchi
   let stableMidi = -1;        // ultima nota letta (per la conferma di stabilità)
   let stableCount = 0;        // per quanti frame consecutivi è stabile
-  // soglie onset (tarabili): quanto deve salire l'RMS per contare un attacco
-  let ONSET_RISE = 0.010;     // incremento minimo di RMS tra due frame
-  const REFRACTORY_MS = 130;  // tempo morto dopo un attacco accettato
-  const STABLE_FRAMES = 2;    // frame di conferma del pitch prima di accettare
-  const REARM_FACTOR = 0.55;  // ci si "riarma" quando l'RMS scende sotto questo
-                              // frazione del picco recente
   let recentPeak = 0;         // picco di RMS recente (per la soglia di riarmo)
-
-  // sensori
-  let orientationHandler = null, tiltOkSince = 0, tiltGatePassed = false;
-  let orientPermission = "unavailable"; // esito di requestOrientationPermission
+  // "Sensibilità tocco": quanto deve calare l'RMS (rispetto al picco) perché
+  // il sistema si consideri pronto a una nuova nota. Valore basso = si riarma
+  // facilmente (più sensibile, rischio doppi conteggi); alto = più severo.
+  let ONSET_REARM = 0.45;     // riarmo quando rms < recentPeak * (1 - ONSET_REARM)... vedi pollAudio
+  const REFRACTORY_MS = 120;  // tempo morto minimo dopo un attacco accettato
+  const STABLE_FRAMES = 2;    // frame di conferma del pitch prima di accettare
 
   // game loop
   let rafId = null, lastTs = 0, running = false;
-  let gameState = "idle"; // idle | permissions | waitingTilt | playing | gameover
+  let gameState = "idle"; // idle | permissions | calibrating | playing | gameover
 
   // mondo di gioco
   let cfg = DIFFICULTIES[CURRENT_DIFFICULTY];
@@ -280,46 +281,44 @@
     analyser.getFloatTimeDomainData(timeBuf);
     const rms = computeRms(timeBuf);
     const now = performance.now();
+    lastRms = rms;
 
-    // decadimento del picco recente (per la soglia di riarmo)
-    recentPeak = Math.max(rms, recentPeak * 0.92);
+    // picco recente con decadimento lento (riferimento per il riarmo)
+    recentPeak = Math.max(rms, recentPeak * 0.96);
 
-    // silenzio: azzera tutto e riarma
+    // silenzio: azzera e riarma
     if (rms < RMS_THRESHOLD) {
       lastDetected = null;
       armed = true;
       stableMidi = -1; stableCount = 0;
-      prevRms = rms; lastRms = rms;
+      recentPeak = Math.max(rms, recentPeak * 0.85); // svuota più in fretta
       return;
     }
 
+    // RIARMO: se l'energia è ricaduta sotto una frazione del picco recente,
+    // significa che la nota è stata rilasciata / sta decadendo: pronto a una
+    // nuova. ONSET_REARM alto => serve un calo maggiore => meno doppi conteggi.
+    if (!armed && rms < recentPeak * (1 - ONSET_REARM)) armed = true;
+
     // pitch detection
     const { freq, clarity } = autoCorrelate(timeBuf, audioCtx.sampleRate);
-    if (freq <= 0) {
-      // suono presente ma pitch non affidabile: non aggiorno la nota,
-      // ma aggiorno comunque l'energia per l'onset
-      prevRms = rms; lastRms = rms;
+    if (freq <= 0) { /* pitch incerto: tieni l'ultima nota, niente onset */
+      if (lastDetected) lastDetected = { ...lastDetected, rms, isOnset: false };
       return;
     }
 
     const midi = Math.round(freqToMidi(freq));
     const note = midiToNote(midi);
 
-    // conferma di stabilità: il pitch deve ripetersi per N frame.
-    // Questo scarta i transienti d'attacco (pitch ballerino nei primi ms).
+    // conferma di stabilità del pitch (scarta i transienti iniziali)
     if (midi === stableMidi) stableCount++;
     else { stableMidi = midi; stableCount = 1; }
 
-    // --- rilevamento dell'attacco ---
-    // riarmo: quando l'energia è scesa abbastanza sotto il picco recente,
-    // sono di nuovo pronto ad accettare un attacco
-    if (!armed && rms < recentPeak * REARM_FACTOR) armed = true;
-
-    // un onset è: salita netta di RMS, mentre sono "armato" e fuori dal
-    // periodo refrattario, con pitch confermato stabile
-    const rising = (rms - prevRms) >= ONSET_RISE;
+    // SPARA un onset: siamo armati, sopra soglia (già garantito), pitch
+    // stabile e fuori dal periodo refrattario. NON serve che l'RMS stia
+    // ancora salendo: sul piano l'attacco è troppo rapido per vederlo.
     let isOnset = false;
-    if (armed && rising && now >= refractoryUntil && stableCount >= STABLE_FRAMES) {
+    if (armed && stableCount >= STABLE_FRAMES && now >= refractoryUntil) {
       isOnset = true;
       armed = false;
       refractoryUntil = now + REFRACTORY_MS;
@@ -327,7 +326,6 @@
 
     lastDetected = { midi, name: note.name, octave: note.octave, pc: note.pc,
                      freq, rms, clarity, isOnset };
-    prevRms = rms; lastRms = rms;
   }
 
   function noteMatches(detectedMidi, targetMidi) {
@@ -336,54 +334,14 @@
   }
 
   /* =====================================================================
-     (2) SETUP SENSORI / ORIENTAMENTO (gate di avvio)
+     (2) GEOMETRIA E LAYOUT
      ===================================================================== */
 
-  async function requestOrientationPermission() {
-    const D = window.DeviceOrientationEvent;
-    if (D && typeof D.requestPermission === "function") {
-      try { return (await D.requestPermission()) === "granted" ? "granted" : "unavailable"; }
-      catch (e) { return "unavailable"; }
-    } else if (D) {
-      return "android";
-    }
-    return "unavailable";
-  }
-
-  const TILT_TOL = 20;       // gradi di tolleranza
-  const TILT_HOLD_MS = 1000; // tempo continuo richiesto
-
-  function startTiltGate() {
-    tiltOkSince = 0; tiltGatePassed = false;
-    orientationHandler = function (ev) {
-      if (tiltGatePassed) return;
-      const beta = ev.beta, gamma = ev.gamma;
-      if (beta === null || gamma === null) return;
-      const flat = Math.abs(beta) <= TILT_TOL && Math.abs(gamma) <= TILT_TOL;
-      const now = performance.now();
-      if (flat) {
-        if (tiltOkSince === 0) tiltOkSince = now;
-        const held = now - tiltOkSince;
-        if (elTiltMsg) elTiltMsg.textContent = "Perfetto, tieni fermo… " + Math.ceil((TILT_HOLD_MS - held) / 1000) + "s";
-        if (held >= TILT_HOLD_MS) { tiltGatePassed = true; stopTiltGate(); beginPlaying(); }
-      } else {
-        tiltOkSince = 0;
-        if (elTiltMsg) elTiltMsg.textContent = "Appoggia il telefono in orizzontale sul pianoforte";
-      }
-    };
-    window.addEventListener("deviceorientation", orientationHandler, true);
-  }
-
-  function stopTiltGate() {
-    if (orientationHandler) {
-      window.removeEventListener("deviceorientation", orientationHandler, true);
-      orientationHandler = null;
-    }
-  }
-
-  /* =====================================================================
-     (3) GAME LOOP + RENDERING CANVAS
-     ===================================================================== */
+  // Posizioni orizzontali (calcolate in resize):
+  //   directorX = dove sta il direttore (a sinistra)
+  //   runnerX   = dove riposa la nota corrente, il "punto del leggio"
+  //               (verso il centro, lontano dal direttore per leggibilità)
+  let directorX = 0;
 
   function resizeCanvas() {
     if (!canvas) return;
@@ -396,11 +354,14 @@
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     ctx.imageSmoothingEnabled = false;
 
-    lineGap = Math.max(14, Math.round(H * 0.045));
-    staffY = Math.round(H * 0.62);
-    runnerX = Math.round(W * 0.18);
-    // distanza tra le note in fila: lo spazio da runner al bordo destro / slot
-    slotGap = Math.max(70, Math.round((W - runnerX - 30) / VISIBLE_SLOTS));
+    // In landscape su iPhone H è ~390px: servono proporzioni generose.
+    // Pentagramma centrato verticalmente, righe ben spaziate.
+    lineGap = Math.max(18, Math.round(H * 0.085));
+    staffY = Math.round(H * 0.60);          // linea inferiore del rigo
+    directorX = Math.round(W * 0.14);       // direttore a sinistra
+    runnerX = Math.round(W * 0.52);         // nota corrente verso il centro
+    // distanza tra slot: usata solo per l'animazione di scorrimento
+    slotGap = Math.max(120, Math.round(W * 0.30));
   }
 
   function midiToStaffY(midi) {
@@ -444,8 +405,8 @@
     ctx.fillRect(0, 0, W, H);
 
     // alone caldo di candela attorno al direttore (luce radente)
-    const g = ctx.createRadialGradient(runnerX, staffY - lineGap * 2, 10,
-                                       runnerX, staffY - lineGap * 2, W * 0.7);
+    const g = ctx.createRadialGradient(directorX, staffY - lineGap * 2, 10,
+                                       directorX, staffY - lineGap * 2, W * 0.6);
     g.addColorStop(0, "rgba(212,168,67,0.10)");
     g.addColorStop(1, "rgba(212,168,67,0)");
     ctx.fillStyle = g;
@@ -496,12 +457,15 @@
     ctx.restore();
   }
 
-  // Posizione X di uno slot, tenendo conto dell'animazione di scorrimento.
-  // Durante lo shift le note "scivolano" da uno slot al precedente.
+  // Posizione X di uno slot.
+  // A riposo (shiftAnim=0) lo slot 0 sta esattamente a runnerX.
+  // Durante lo shift (shiftAnim 1->0) le note traslano a sinistra di slotGap:
+  // la corrente (slot 0) scivola verso il direttore e la prossima (slot 1)
+  // arriva a runnerX. A shift concluso, update() fa notes.shift().
   function slotX(index) {
-    // shiftAnim va da 1 (appena indovinato) a 0 (fermo): le note partono
-    // dallo slot index+1 e arrivano a index.
-    return runnerX + (index + shiftAnim) * slotGap;
+    if (shiftAnim <= 0) return runnerX + index * slotGap;
+    const progress = 1 - shiftAnim;            // 0 -> 1 nel corso dello shift
+    return runnerX + (index - progress) * slotGap;
   }
 
   // Mostra SOLO la nota corrente (slot 0). Durante lo scorrimento si vede
@@ -512,10 +476,13 @@
     for (let i = 0; i <= maxIndex && i < notes.length; i++) {
       const n = notes[i];
       const x = slotX(i);
-      // opacità: la corrente piena; quella in arrivo sfuma dentro durante lo shift
       let alpha = 1;
-      if (i === 0) alpha = shiftAnim > 0 ? (1 - shiftAnim) * 0.5 + 0.5 : 1; // esce/affievolisce
-      if (i === 1) alpha = 1 - shiftAnim;                                    // entra
+      if (shiftAnim > 0) {
+        // slot 0 esce e svanisce; slot 1 entra e compare
+        if (i === 0) alpha = shiftAnim;        // 1 -> 0
+        else alpha = 1 - shiftAnim;            // 0 -> 1
+      }
+      // la "nota target" piena (con alone) solo quando è ferma a riposo
       drawNoteEntity(n, x, i === 0 && shiftAnim === 0, alpha);
     }
   }
@@ -624,7 +591,7 @@
       batonAngle = -0.6 - Math.sin(t * Math.PI) * 0.8;
     }
 
-    const x = runnerX, y = groundY + hop + bob;
+    const x = directorX, y = groundY + hop + bob;
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(lean);
@@ -683,7 +650,7 @@
     // scintille d'inchiostro ciano sul colpo riuscito
     if (runnerAnim === "conduct") {
       const t = Math.min(1, runnerAnimT / CONDUCT_TIME);
-      const sparkX = runnerX + 34, sparkY = groundY - 18;
+      const sparkX = directorX + 34, sparkY = groundY - 18;
       ctx.fillStyle = "rgba(127,212,232," + (1 - t).toFixed(2) + ")";
       for (let s = 0; s < 6; s++) {
         const a = (s / 6) * Math.PI * 2 + t * 3;
@@ -698,7 +665,7 @@
     ctx.fillStyle = PAL.ink;
     ctx.font = "20px 'Cormorant Garamond', Georgia, serif";
     ctx.textAlign = "left";
-    ctx.fillText(score + (score === 1 ? " battuta" : " battute"), 16, 32);
+    ctx.fillText(score === 0 ? "—" : score + (score === 1 ? " battuta" : " battute"), 16, 32);
 
     // vite come gocce d'inchiostro (♪), in alto a destra
     ctx.textAlign = "right";
@@ -839,7 +806,6 @@
      ===================================================================== */
 
   function beginPlaying() {
-    if (elTiltScreen) elTiltScreen.classList.add("hidden");
     gameState = "playing";
     resetGame();
     running = true;
@@ -852,7 +818,7 @@
     score = 0; lives = MAX_LIVES; section = "A";
     // reset stato onset/audio
     armed = true; refractoryUntil = 0; stableMidi = -1; stableCount = 0;
-    prevRms = 0; recentPeak = 0;
+    recentPeak = 0;
     shiftAnim = 0; runnerAnim = "idle"; runnerAnimT = 0; flashErr = 0;
     // riempi la coda con VISIBLE_SLOTS note
     notes = [];
@@ -874,18 +840,16 @@
     beginPlaying();
   }
 
-  // Pulizia all'uscita dalla stanza: ferma il loop e il gate, riporta la
-  // UI alla schermata iniziale. NON distrugge l'AudioContext (riusabile).
+  // Pulizia all'uscita dalla stanza: ferma il loop, riporta la UI alla
+  // schermata iniziale. NON distrugge l'AudioContext (riusabile).
   function stopPianoforte() {
     running = false;
     if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
-    stopTiltGate();
     stopCalibration();
     gameState = "idle";
     if (elGameOver) elGameOver.classList.add("hidden");
-    if (elTiltScreen) elTiltScreen.classList.add("hidden");
     if (elStart) elStart.classList.remove("hidden");
-    if (elStartBtn) { elStartBtn.disabled = false; elStartBtn.textContent = "Avvia"; }
+    if (elStartBtn) { elStartBtn.disabled = false; elStartBtn.textContent = "Sali sul podio"; }
   }
   // esposta globalmente così il router/altri bottoni possono fermare il gioco
   window.stopPianoforte = stopPianoforte;
@@ -931,17 +895,17 @@
       };
     }
     if (elOnsetSlider) {
-      elOnsetSlider.value = ONSET_RISE;
-      elOnsetVal.textContent = ONSET_RISE.toFixed(3);
+      elOnsetSlider.value = ONSET_REARM;
+      elOnsetVal.textContent = ONSET_REARM.toFixed(2);
       elOnsetSlider.oninput = () => {
-        ONSET_RISE = parseFloat(elOnsetSlider.value);
-        elOnsetVal.textContent = ONSET_RISE.toFixed(3);
+        ONSET_REARM = parseFloat(elOnsetSlider.value);
+        elOnsetVal.textContent = ONSET_REARM.toFixed(2);
       };
     }
     if (elCalibContinue) {
       elCalibContinue.onclick = () => {
         stopCalibration();
-        goToTiltGate();
+        beginPlaying();   // niente più gate tilt: si gioca direttamente
       };
     }
 
@@ -1002,7 +966,7 @@
           <div class="pf-rule"></div>
           <p class="pf-subtitle">Davanti a te, una nota sul pentagramma.<br>Suonala al pianoforte per dirigerla.<br>Sbaglia, e il direttore inciampa.</p>
           <button id="startBtn" class="pf-bigBtn">Sali sul podio</button>
-          <p class="pf-hint">Useremo microfono e sensori del telefono.</p>
+          <p class="pf-hint">Tieni il telefono orizzontale, appoggiato sul pianoforte. Useremo il microfono.</p>
           <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna indietro</button>
         </div>
 
@@ -1029,20 +993,13 @@
             <span id="clarityVal" class="pf-sliderVal">0.75</span>
           </div>
           <div class="pf-sliderRow">
-            <label>Sensibilità tocco</label>
-            <input id="onsetSlider" class="pf-slider" type="range" min="0.003" max="0.05" step="0.001">
-            <span id="onsetVal" class="pf-sliderVal">0.010</span>
+            <label>Stacco tra note</label>
+            <input id="onsetSlider" class="pf-slider" type="range" min="0.15" max="0.80" step="0.01">
+            <span id="onsetVal" class="pf-sliderVal">0.45</span>
           </div>
-          <p class="pf-hint">Se non rileva, abbassa volume e qualità. Se conta due volte la stessa nota, alza la sensibilità tocco.</p>
+          <p class="pf-hint">Se non rileva, abbassa volume e qualità. Se conta due volte la stessa nota, alza lo stacco tra note.</p>
 
-          <button id="calibContinue" class="pf-bigBtn">Continua</button>
-          <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna indietro</button>
-        </div>
-
-        <div id="tiltScreen" class="pf-overlay hidden">
-          <div class="pf-phoneIcon">𝄞</div>
-          <p id="tiltMsg" class="pf-tiltMsg">Appoggia il telefono in orizzontale sul pianoforte</p>
-          <button id="readyBtn" class="pf-bigBtn hidden">Sono pronto</button>
+          <button id="calibContinue" class="pf-bigBtn">Comincia</button>
           <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna indietro</button>
         </div>
 
@@ -1067,9 +1024,6 @@
     ctx = canvas.getContext("2d");
     elStart = document.getElementById("startScreen");
     elStartBtn = document.getElementById("startBtn");
-    elReadyBtn = document.getElementById("readyBtn");
-    elTiltScreen = document.getElementById("tiltScreen");
-    elTiltMsg = document.getElementById("tiltMsg");
     elGameOver = document.getElementById("gameOverScreen");
     elRestartBtn = document.getElementById("restartBtn");
     elFinalScore = document.getElementById("finalScore");
@@ -1094,39 +1048,19 @@
 
   async function onStartTap() {
     elStartBtn.disabled = true;
-    elStartBtn.textContent = "Attendi…";
+    elStartBtn.textContent = "Un momento…";
     gameState = "permissions";
 
     const audioOk = await initAudio();
-    if (!audioOk) { elStartBtn.disabled = false; elStartBtn.textContent = "Avvia"; return; }
-
-    // chiedi SUBITO il permesso sensori (deve stare nel gesto del tap su iOS),
-    // ma il gate del tilt lo attiviamo solo dopo la calibrazione
-    orientPermission = await requestOrientationPermission();
+    if (!audioOk) { elStartBtn.disabled = false; elStartBtn.textContent = "Sali sul podio"; return; }
 
     elStart.classList.add("hidden");
-    // -> schermata di prova microfono
-    startCalibration();
-  }
-
-  // Dopo la calibrazione: schermata "appoggia il telefono" + gate del tilt.
-  function goToTiltGate() {
-    elTiltScreen.classList.remove("hidden");
-    if (orientPermission === "unavailable") {
-      elTiltMsg.textContent = "Sensori non disponibili. Premi quando sei pronto.";
-      elReadyBtn.classList.remove("hidden");
-    } else {
-      elReadyBtn.classList.add("hidden");
-      elTiltMsg.textContent = "Appoggia il telefono in orizzontale sul pianoforte";
-      startTiltGate();
-    }
+    startCalibration();   // microfono ok -> prova/accordatura -> gioco
   }
 
   // PUNTO DI INGRESSO dal router. IDEMPOTENTE: il router lo chiama ogni
   // volta che si entra nella stanza, anche al ritorno dal menu.
   function avviaPianoforteInit() {
-    // se il markup non c'è (router non ha chiamato creaPianoforte, o il div
-    // è stato sovrascritto), lo iniettiamo noi
     if (!document.getElementById("gameCanvas")) creaPianoforte();
     if (!cacheElements()) return;
 
@@ -1137,14 +1071,14 @@
         resizeCanvas();
         if (gameState !== "playing") render();
       });
+      // su mobile il cambio orientamento arriva con un evento dedicato
+      window.addEventListener("orientationchange", () => {
+        setTimeout(() => { resizeCanvas(); if (gameState !== "playing") render(); }, 200);
+      });
       initialized = true;
     }
 
-    // i bottoni sono nel markup iniettato: riattacco i listener ogni volta
-    // (sono elementi nuovi se il div è stato rigenerato). Uso .onclick così
-    // non si accumulano handler duplicati.
     if (elStartBtn) elStartBtn.onclick = onStartTap;
-    if (elReadyBtn) elReadyBtn.onclick = () => { stopTiltGate(); beginPlaying(); };
     if (elRestartBtn) elRestartBtn.onclick = restartGame;
 
     stopPianoforte(); // stato pulito alla (ri)entrata
@@ -1153,7 +1087,7 @@
   window.avviaPianoforteInit = avviaPianoforteInit;
 
   // L'HTML del sito ha un onclick="avviaPianoforte()" (vecchio nome).
-  // Alias per non lasciare un riferimento rotto: avvia il flow dei permessi.
+  // Alias per non lasciare un riferimento rotto.
   window.avviaPianoforte = function () {
     if (elStartBtn) onStartTap();
   };
