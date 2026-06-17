@@ -116,6 +116,7 @@
   let DPR = 1, W = 0, H = 0;
 
   let elStart, elStartBtn;
+  let elSelectScreen, elChangeModeBtn, elFinalLabel;
   let elGameOver, elRestartBtn, elFinalScore, elDebug;
 
   // schermata di calibrazione microfono
@@ -156,7 +157,14 @@
 
   // game loop
   let rafId = null, lastTs = 0, running = false;
-  let gameState = "idle"; // idle | permissions | calibrating | playing | gameover
+  let gameState = "idle"; // idle | select | permissions | calibrating | playing | endseq | gameover
+
+  // --- MODALITÀ DI GIOCO ---
+  // "direttore"  : nota ferma, la suoni per farla avanzare (no tempo)
+  // "scorrimento": endless runner, le note arrivano da destra (pressione tempo)
+  // "dettato"    : il gioco suona 4 note, tu le ripeti nell'ordine
+  // "memoria"    : come dettato ma la sequenza si allunga ogni volta (fino a 8)
+  let MODE = "direttore";
 
   // mondo di gioco
   let cfg = DIFFICULTIES[CURRENT_DIFFICULTY];
@@ -166,27 +174,51 @@
   const MAX_LIVES = 3;
   let runFrame = 0;
 
-  // --- Coda di note a SLOT fissi (niente scorrimento temporale) ---
-  // notes[0] è la nota davanti all'omino (il target corrente). Le altre
-  // sono in fila a destra. Quando si indovina, tutta la coda scorre di uno
-  // slot a sinistra con un'animazione, e ne entra una nuova in fondo.
-  let notes = [];            // ogni nota: { midi } oppure { midis, progress, label } per accordo
-  const VISIBLE_SLOTS = 5;   // quante note tenere in fila
-  let slotGap = 0;           // distanza orizzontale tra slot (calcolata in resize)
+  // --- Coda di note a SLOT fissi (modalità direttore) ---
+  let notes = [];            // { type:"note", midi } oppure { type:"chord", midis, progress, label }
+  const VISIBLE_SLOTS = 5;
+  let slotGap = 0;
 
   // animazione di scorrimento della coda (shift) e feedback omino
-  let shiftAnim = 0;         // 0 = fermo; 1 -> 0 mentre la coda scorre di uno slot
-  const SHIFT_TIME = 0.28;   // durata scorrimento (s)
-  // stato animazione direttore: idle | conduct (successo) | stumble (errore)
-  let runnerAnim = "idle";
-  let runnerAnimT = 0;       // tempo trascorso nell'animazione corrente
+  let shiftAnim = 0;
+  const SHIFT_TIME = 0.28;
+  let runnerAnim = "idle";   // idle | conduct | stumble | bow (inchino finale)
+  let runnerAnimT = 0;
   const CONDUCT_TIME = 0.45;
   const STUMBLE_TIME = 0.55;
-  let flashErr = 0;          // breve flash rosso su errore
+  let flashErr = 0;
+
+  // --- Modalità SCORRIMENTO (endless runner) ---
+  // ogni elemento: { midi, x } con x in px; scorrono verso runnerX da destra.
+  let scrollNotes = [];
+  let scrollSpeed = 0;       // px/s, cresce col punteggio
+  let scrollSpawnX = 0;      // prossima x di spawn (per spaziatura costante)
+  const SCROLL_BASE_SPEED = 90;
+  const SCROLL_SPAWN_GAP = 240; // px tra una nota e l'altra
+
+  // --- Modalità DETTATO / MEMORIA ---
+  let seq = [];              // sequenza di midi da ripetere
+  let seqProgress = 0;       // quante note della sequenza ho già ripetuto
+  let seqPhase = "listen";   // listen (il gioco suona) | repeat (tocca a te)
+  let seqPlayIndex = 0;      // indice nota in riproduzione durante "listen"
+  let seqPlayTimer = 0;      // timer per scandire la riproduzione
+  let seqLen = 4;            // lunghezza sequenza (4 fisso in dettato, cresce in memoria)
+  const SEQ_NOTE_MS = 620;   // durata di ogni nota suonata dal gioco
+  const SEQ_GAP_MS = 180;    // pausa tra note
+  let seqMaxLen = 0;         // record di lunghezza (memoria)
+
+  // --- Animazione di FINE PARTITA ---
+  let endParticles = [];     // simboli musicali che cadono
+  let endTimer = 0;          // durata della sequenza finale prima della schermata
+  const END_DURATION = 2.2;  // secondi
+
+  // --- Indicatore "armed" (pronto a ricevere una nota) ---
+  // armed è già gestito in pollAudio; qui solo per il pulsare visivo.
 
   /* =====================================================================
      (1) SETUP AUDIO + PITCH DETECTION
      ===================================================================== */
+
 
   async function initAudio() {
     try {
@@ -217,6 +249,77 @@
     for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
     return Math.sqrt(sum / buf.length);
   }
+
+  /* ---------------------------------------------------------------------
+     SINTESI AUDIO — feedback sonoro (gain basso, non sovrasta il piano).
+     Tutti i suoni usano un GainNode con envelope per evitare i "click".
+     --------------------------------------------------------------------- */
+
+  function midiToHz(midi) { return 440 * Math.pow(2, (midi - 69) / 12); }
+
+  // Tono breve con envelope morbido. type: forma d'onda.
+  function playTone(freq, dur, when, type, peakGain) {
+    if (!audioCtx) return;
+    const t0 = when != null ? when : audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = type || "sine";
+    osc.frequency.value = freq;
+    const peak = peakGain != null ? peakGain : 0.16;
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(peak, t0 + 0.012);          // attacco
+    g.gain.exponentialRampToValueAtTime(0.0008, t0 + dur);     // rilascio
+    osc.connect(g); g.connect(audioCtx.destination);
+    osc.start(t0); osc.stop(t0 + dur + 0.02);
+  }
+
+  // Successo: la nota stessa, breve e pulita.
+  function sfxSuccess(midi) {
+    playTone(midiToHz(midi), 0.18, null, "sine", 0.16);
+    // armonica leggera per renderlo più "campanellino"
+    playTone(midiToHz(midi) * 2, 0.12, null, "sine", 0.05);
+  }
+
+  // Errore: buzz basso e corto.
+  function sfxError() {
+    if (!audioCtx) return;
+    const t0 = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(140, t0);
+    osc.frequency.exponentialRampToValueAtTime(90, t0 + 0.12);
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(0.14, t0 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0008, t0 + 0.14);
+    osc.connect(g); g.connect(audioCtx.destination);
+    osc.start(t0); osc.stop(t0 + 0.16);
+  }
+
+  // Sequenza completata (dettato/memoria): arpeggio ascendente DO-MI-SOL.
+  function sfxFanfare() {
+    if (!audioCtx) return;
+    const base = audioCtx.currentTime;
+    [60, 64, 67, 72].forEach((m, i) => {
+      playTone(midiToHz(m), 0.22, base + i * 0.09, "triangle", 0.14);
+    });
+  }
+
+  // Game over: tre note discendenti, lente e meste.
+  function sfxGameOver() {
+    if (!audioCtx) return;
+    const base = audioCtx.currentTime;
+    [67, 64, 60].forEach((m, i) => {
+      playTone(midiToHz(m), 0.5, base + i * 0.28, "sine", 0.15);
+    });
+  }
+
+  // Nota suonata dal gioco durante il dettato (timbro distinto, più pieno).
+  function sfxDictationNote(midi) {
+    playTone(midiToHz(midi), 0.5, null, "triangle", 0.18);
+    playTone(midiToHz(midi) * 2, 0.3, null, "sine", 0.04);
+  }
+
 
   // -------- AUTOCORRELAZIONE (cuore del pitch detection) --------
   // Approccio MPM: NSDF (autocorrelazione normalizzata robusta all'ampiezza)
@@ -389,10 +492,18 @@
   function render() {
     drawBackground();
     drawStaff();
-    drawNotes();
-    drawRunner();
-    drawHud();
-    // velo rosso smorzato sull'errore
+    if (gameState === "endseq") {
+      // durante la sequenza finale: niente note di gioco, solo direttore+particelle
+      drawRunner();
+      drawEndParticles();
+    } else {
+      if (MODE === "direttore") drawNotes();
+      else if (MODE === "scorrimento") drawScrollNotes();
+      else drawSeqNotes();        // dettato / memoria
+      drawRunner();
+      drawArmedIndicator();
+      drawHud();
+    }
     if (flashErr > 0) {
       ctx.fillStyle = "rgba(193,102,107," + (flashErr * 0.28).toFixed(3) + ")";
       ctx.fillRect(0, 0, W, H);
@@ -493,63 +604,46 @@
     if (n.type === "note") {
       drawLedgerLines(x, n.midi);
       drawNoteHead(x, midiToStaffY(n.midi), n.midi, isTarget);
-      if (cfg.showName) drawNoteLabel(x, midiToStaffY(n.midi), n.midi);
+      // niente nome sulla testa: il nome sta solo in alto (HUD), per non
+      // sovrapporsi alla nota quando questa è in cima al rigo.
     } else { // accordo: pila di teste
       for (let k = 0; k < n.midis.length; k++) {
         drawLedgerLines(x, n.midis[k]);
         drawNoteHead(x, midiToStaffY(n.midis[k]), n.midis[k], isTarget && k < n.progress);
       }
-      if (cfg.showName) {
-        const topM = Math.max(...n.midis);
-        ctx.fillStyle = PAL.ink;
-        ctx.font = "italic 15px 'EB Garamond', Georgia, serif";
-        ctx.textAlign = "center";
-        ctx.fillText(n.label, x, midiToStaffY(topM) - 28);
-        ctx.font = "13px 'EB Garamond', Georgia, serif";
-        const seq = n.midis.map((m, j) => (isTarget && j < n.progress ? "•" : midiToNote(m).name)).join(" ");
-        ctx.fillStyle = PAL.note;
-        ctx.fillText(seq, x, midiToStaffY(topM) - 12);
-      }
     }
     ctx.restore();
   }
 
-  // Testa di nota a "goccia d'inchiostro" con leggero alone.
+  // Testa di nota a "goccia d'inchiostro". Se è la nota target attiva,
+  // alone ciano PULSANTE per massima leggibilità.
   function drawNoteHead(x, y, midi, highlighted) {
     ctx.save();
     const col = highlighted ? PAL.note : PAL.inkDim;
-    // alone luminoso solo sulla nota attiva
     if (highlighted) {
+      const pulse = 12 + Math.sin(runFrame * 0.18) * 6; // alone che respira
       ctx.shadowColor = PAL.note;
-      ctx.shadowBlur = 14;
+      ctx.shadowBlur = pulse;
     }
+    // testa leggermente più grande
     ctx.fillStyle = col;
-    ctx.beginPath(); ctx.ellipse(x, y, 9, 7, -0.35, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(x, y, 10, 7.5, -0.35, 0, Math.PI * 2); ctx.fill();
     ctx.shadowBlur = 0;
-    // gambo a inchiostro
-    ctx.strokeStyle = col; ctx.lineWidth = 2.4; ctx.lineCap = "round";
+    // gambo
+    ctx.strokeStyle = col; ctx.lineWidth = 2.6; ctx.lineCap = "round";
     ctx.beginPath();
     const midLineY = staffY - lineGap * 2;
-    if (y > midLineY) { ctx.moveTo(x + 8, y - 1); ctx.lineTo(x + 8, y - lineGap * 3.2); }
-    else { ctx.moveTo(x - 8, y + 1); ctx.lineTo(x - 8, y + lineGap * 3.2); }
+    if (y > midLineY) { ctx.moveTo(x + 9, y - 1); ctx.lineTo(x + 9, y - lineGap * 3.2); }
+    else { ctx.moveTo(x - 9, y + 1); ctx.lineTo(x - 9, y + lineGap * 3.2); }
     ctx.stroke();
-    // alterazione (♯) accanto alla testa
+    // alterazione (♯)
     const pc = ((midi % 12) + 12) % 12;
     if (PC_TO_DIATONIC[pc].acc === 1) {
       ctx.fillStyle = PAL.gold;
-      ctx.font = "16px 'EB Garamond', Georgia, serif";
+      ctx.font = "18px 'EB Garamond', Georgia, serif";
       ctx.textAlign = "right";
-      ctx.fillText("♯", x - 11, y + 5);
+      ctx.fillText("♯", x - 13, y + 5);
     }
-    ctx.restore();
-  }
-
-  function drawNoteLabel(x, y, midi) {
-    ctx.save();
-    ctx.fillStyle = PAL.ink;
-    ctx.font = "italic 20px 'Cormorant Garamond', Georgia, serif";
-    ctx.textAlign = "center";
-    ctx.fillText(midiToNote(midi).name, x, y - 24);
     ctx.restore();
   }
 
@@ -566,69 +660,63 @@
   }
 
   // Omino DIRETTORE D'ORCHESTRA con bacchetta.
-  // Stati: idle (oscilla piano), conduct (colpo di bacchetta = successo),
-  // stumble (inciampa all'indietro = errore).
+  // Stati: idle, conduct (successo), stumble (errore), bow (inchino finale).
+  const DIR_SCALE = 1.6;     // il direttore è più grande: più presenza sul rigo
   function drawRunner() {
-    // Y a terra: appoggiato sulla linea centrale del pentagramma.
     const groundY = staffY - lineGap * 2;
-    let bob = 0, lean = 0, batonAngle = -0.6, hop = 0;
+    let bob = 0, lean = 0, batonAngle = -0.6, hop = 0, bend = 0;
 
     if (runnerAnim === "idle") {
-      bob = Math.sin(runFrame * 0.12) * 2;        // respiro leggero
+      bob = Math.sin(runFrame * 0.12) * 2;
       batonAngle = -0.6 + Math.sin(runFrame * 0.12) * 0.12;
     } else if (runnerAnim === "conduct") {
-      // colpo di bacchetta: parte alto, scende deciso verso la nota
       const t = Math.min(1, runnerAnimT / CONDUCT_TIME);
-      const swing = Math.sin(t * Math.PI);        // 0->1->0
-      batonAngle = -1.1 + swing * 1.9;            // sferzata verso il basso/avanti
-      hop = -Math.sin(t * Math.PI) * 10;          // piccolo balzo di entusiasmo
+      const swing = Math.sin(t * Math.PI);
+      batonAngle = -1.1 + swing * 1.9;
+      hop = -Math.sin(t * Math.PI) * 10;
       lean = swing * 0.12;
     } else if (runnerAnim === "stumble") {
-      // inciampo: si piega all'indietro e barcolla
       const t = Math.min(1, runnerAnimT / STUMBLE_TIME);
-      lean = -Math.sin(t * Math.PI) * 0.4;        // si butta indietro
-      bob = Math.sin(t * Math.PI * 3) * 3;        // tremolio
+      lean = -Math.sin(t * Math.PI) * 0.4;
+      bob = Math.sin(t * Math.PI * 3) * 3;
       batonAngle = -0.6 - Math.sin(t * Math.PI) * 0.8;
+    } else if (runnerAnim === "bow") {
+      // inchino: si piega lentamente in avanti e si rialza (loop morbido)
+      const t = (runnerAnimT % 1.6) / 1.6;
+      bend = Math.sin(t * Math.PI) * 0.5;   // piega in avanti
+      batonAngle = -0.6 + bend * 0.8;
     }
 
     const x = directorX, y = groundY + hop + bob;
     ctx.save();
     ctx.translate(x, y);
-    ctx.rotate(lean);
+    ctx.scale(DIR_SCALE, DIR_SCALE);
+    ctx.rotate(lean + bend);
 
     const skin = "#d9b896";
 
-    // gambe (inchiostro scuro)
     ctx.fillStyle = PAL.frac;
     if (runnerAnim === "stumble") {
       ctx.fillRect(-9, -6, 6, 8); ctx.fillRect(3, -6, 6, 6);
     } else {
       ctx.fillRect(-8, -6, 6, 7); ctx.fillRect(2, -6, 6, 7);
     }
-    // frac da direttore
     ctx.fillStyle = PAL.frac;
     ctx.fillRect(-9, -23, 18, 17);
-    // sparato della camicia (avorio)
     ctx.fillStyle = PAL.ink;
     ctx.fillRect(-3, -22, 6, 12);
-    // papillon ametista
     ctx.fillStyle = PAL.accent;
     ctx.fillRect(-3, -22, 6, 3);
-    // testa
     ctx.fillStyle = skin;
     ctx.fillRect(-6, -35, 12, 12);
-    // capelli
     ctx.fillStyle = "#2a3142";
     ctx.fillRect(-6, -35, 12, 4);
-    // occhio
     ctx.fillStyle = PAL.frac;
     ctx.fillRect(3, -31, 2, 3);
 
-    // braccio sinistro
     ctx.fillStyle = PAL.frac;
     ctx.fillRect(-12, -20, 4, 8);
 
-    // braccio destro con la BACCHETTA
     ctx.save();
     ctx.translate(8, -19);
     ctx.rotate(batonAngle);
@@ -636,7 +724,6 @@
     ctx.fillRect(0, -2, 9, 4);
     ctx.fillStyle = skin;
     ctx.fillRect(8, -2, 4, 4);
-    // bacchetta: asta avorio con punta ametista luminosa
     ctx.strokeStyle = PAL.ink; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(11, 0); ctx.lineTo(30, 0); ctx.stroke();
     ctx.shadowColor = PAL.accent; ctx.shadowBlur = 8;
@@ -647,52 +734,139 @@
 
     ctx.restore();
 
-    // scintille d'inchiostro ciano sul colpo riuscito
+    // scintille d'inchiostro ciano sul colpo riuscito (scalate)
     if (runnerAnim === "conduct") {
       const t = Math.min(1, runnerAnimT / CONDUCT_TIME);
-      const sparkX = directorX + 34, sparkY = groundY - 18;
+      const sparkX = directorX + 34 * DIR_SCALE, sparkY = groundY - 18 * DIR_SCALE;
       ctx.fillStyle = "rgba(127,212,232," + (1 - t).toFixed(2) + ")";
       for (let s = 0; s < 6; s++) {
         const a = (s / 6) * Math.PI * 2 + t * 3;
-        const r = 6 + t * 18;
-        ctx.fillRect(Math.round(sparkX + Math.cos(a) * r), Math.round(sparkY + Math.sin(a) * r), 2.5, 2.5);
+        const r = 8 + t * 22;
+        ctx.fillRect(Math.round(sparkX + Math.cos(a) * r), Math.round(sparkY + Math.sin(a) * r), 3, 3);
       }
     }
   }
 
+  // Cerchietto "armed": verde quando il sistema è pronto a una nuova nota,
+  // grigio quando è in attesa di rilascio. Sta sopra la testa del direttore.
+  function drawArmedIndicator() {
+    if (MODE === "dettato" || MODE === "memoria") {
+      if (seqPhase !== "repeat") return; // mostra solo quando tocca al giocatore
+    }
+    const cx = directorX;
+    const cy = staffY - lineGap * 2 - 38 * DIR_SCALE;
+    ctx.save();
+    if (armed) { ctx.shadowColor = "#6fcf8e"; ctx.shadowBlur = 10; ctx.fillStyle = "#6fcf8e"; }
+    else { ctx.fillStyle = "rgba(154,143,118,0.4)"; }
+    ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  // --- Disegno note modalità SCORRIMENTO ---
+  function drawScrollNotes() {
+    for (const n of scrollNotes) {
+      const isTarget = Math.abs(n.x - runnerX) < slotGap * 0.5 && n.x >= runnerX - 12;
+      ctx.save();
+      ctx.globalAlpha = 1;
+      drawLedgerLines(n.x, n.midi);
+      drawNoteHead(n.x, midiToStaffY(n.midi), n.midi, isTarget);
+      ctx.restore();
+    }
+  }
+
+  // --- Disegno note modalità DETTATO / MEMORIA ---
+  // Mostra la sequenza come teste sul rigo: già ripetute in ciano, ancora da
+  // fare in grigio. Durante l'ascolto evidenzia quella in riproduzione.
+  function drawSeqNotes() {
+    if (!seq.length) return;
+    const startX = runnerX - slotGap * 0.5;
+    const gap = Math.min(slotGap * 0.7, (W - startX - 30) / Math.max(1, seq.length));
+    for (let i = 0; i < seq.length; i++) {
+      const x = startX + i * gap;
+      let hi = false;
+      if (seqPhase === "listen") hi = (i === seqPlayIndex);
+      else hi = (i === seqProgress); // la prossima da suonare
+      const done = (seqPhase === "repeat" && i < seqProgress);
+      ctx.save();
+      ctx.globalAlpha = done ? 0.45 : 1;
+      drawLedgerLines(x, seq[i]);
+      drawNoteHead(x, midiToStaffY(seq[i]), seq[i], hi);
+      ctx.restore();
+    }
+  }
+
+  // --- Particelle di fine partita (note che cadono) ---
+  function drawEndParticles() {
+    ctx.save();
+    ctx.fillStyle = PAL.gold;
+    ctx.textAlign = "center";
+    for (const p of endParticles) {
+      ctx.globalAlpha = Math.max(0, Math.min(1, p.life));
+      ctx.font = p.size + "px 'EB Garamond', Georgia, serif";
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillText(p.glyph, 0, 0);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  // Nome nota grande in alto al centro, con alone scuro per leggibilità.
+  function drawBigNoteName(txt) {
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.font = "italic 28px 'Cormorant Garamond', Georgia, serif";
+    ctx.shadowColor = "rgba(0,0,0,0.7)"; ctx.shadowBlur = 8;
+    ctx.fillStyle = PAL.gold;
+    ctx.fillText(txt, W / 2, 36);
+    ctx.restore();
+  }
+
   function drawHud() {
-    // punteggio (serif, in alto a sinistra)
+    // punteggio in alto a sinistra (etichetta per modalità)
     ctx.fillStyle = PAL.ink;
     ctx.font = "20px 'Cormorant Garamond', Georgia, serif";
     ctx.textAlign = "left";
-    ctx.fillText(score === 0 ? "—" : score + (score === 1 ? " battuta" : " battute"), 16, 32);
+    let scoreLabel;
+    if (MODE === "memoria") scoreLabel = "lunghezza " + (seq.length || seqLen);
+    else scoreLabel = score === 0 ? "—" : score + (score === 1 ? " battuta" : " battute");
+    ctx.fillText(scoreLabel, 16, 32);
 
-    // vite come gocce d'inchiostro (♪), in alto a destra
-    ctx.textAlign = "right";
-    let lifeX = W - 16;
-    for (let i = MAX_LIVES - 1; i >= 0; i--) {
-      ctx.fillStyle = i < lives ? PAL.accent : "rgba(154,143,118,0.3)";
-      ctx.font = "20px 'EB Garamond', Georgia, serif";
-      ctx.fillText("♪", lifeX, 32);
-      lifeX -= 22;
+    // vite (solo modalità con vite: direttore, scorrimento, memoria)
+    if (MODE !== "dettato") {
+      ctx.textAlign = "right";
+      let lifeX = W - 16;
+      const showLives = (MODE === "memoria") ? 1 : MAX_LIVES; // memoria: 1 vita
+      for (let i = showLives - 1; i >= 0; i--) {
+        ctx.fillStyle = i < lives ? PAL.accent : "rgba(154,143,118,0.3)";
+        ctx.font = "20px 'EB Garamond', Georgia, serif";
+        ctx.fillText("♪", lifeX, 32);
+        lifeX -= 22;
+      }
     }
 
-    // sezione (eyebrow discreto)
-    ctx.fillStyle = PAL.inkDim;
-    ctx.font = "italic 13px 'EB Garamond', Georgia, serif";
-    ctx.textAlign = "right";
-    ctx.fillText(section === "A" ? "note sciolte" : "arpeggi", W - 16, 52);
-
-    // nota target corrente (al centro, sopra il rigo)
-    const target = notes[0];
-    if (target && shiftAnim === 0) {
-      ctx.textAlign = "center";
-      ctx.fillStyle = PAL.gold;
-      ctx.font = "italic 17px 'Cormorant Garamond', Georgia, serif";
-      let txt;
-      if (target.type === "note") txt = midiToNote(target.midi).name;
-      else txt = target.midis.slice(target.progress).map(m => midiToNote(m).name).join(" · ");
-      ctx.fillText(txt, W / 2, 30);
+    // nome nota / indicazione corrente in alto al centro
+    if (MODE === "direttore") {
+      const target = notes[0];
+      if (target && shiftAnim === 0) {
+        let txt = target.type === "note" ? midiToNote(target.midi).name
+          : target.midis.slice(target.progress).map(m => midiToNote(m).name).join(" · ");
+        drawBigNoteName(txt);
+      }
+    } else if (MODE === "scorrimento") {
+      // mostra il nome della nota target più vicina al direttore
+      let near = null, best = Infinity;
+      for (const n of scrollNotes) {
+        if (n.x >= runnerX - 12) { const d = n.x - runnerX; if (d < best) { best = d; near = n; } }
+      }
+      if (near) drawBigNoteName(midiToNote(near.midi).name);
+    } else { // dettato / memoria
+      if (seqPhase === "listen") drawBigNoteName("Ascolta…");
+      else {
+        const m = seq[seqProgress];
+        if (m != null) drawBigNoteName(midiToNote(m).name);
+      }
     }
   }
 
@@ -709,28 +883,156 @@
   function update(dt) {
     runFrame++;
 
-    // avanzamento animazioni (indipendenti dal gameplay, solo estetica)
-    if (runnerAnim !== "idle") {
+    // animazioni del direttore
+    if (runnerAnim !== "idle" && runnerAnim !== "bow") {
       runnerAnimT += dt;
       const dur = runnerAnim === "conduct" ? CONDUCT_TIME : STUMBLE_TIME;
       if (runnerAnimT >= dur) { runnerAnim = "idle"; runnerAnimT = 0; }
     }
     if (flashErr > 0) flashErr = Math.max(0, flashErr - dt / 0.35);
 
-    // animazione di scorrimento della coda: shiftAnim cala da 1 a 0
+    // sequenza di FINE PARTITA (inchino + particelle)
+    if (gameState === "endseq") { updateEndSeq(dt); return; }
+
+    if (MODE === "direttore")        updateDirettore(dt);
+    else if (MODE === "scorrimento") updateScorrimento(dt);
+    else                             updateDettato(dt);  // dettato + memoria
+  }
+
+  /* ---------- MODALITÀ DIRETTORE ---------- */
+  function updateDirettore(dt) {
     if (shiftAnim > 0) {
       shiftAnim = Math.max(0, shiftAnim - dt / SHIFT_TIME);
       if (shiftAnim === 0) {
-        // scorrimento finito: rimuovi la nota suonata e rifornisci la coda
         notes.shift();
         while (notes.length < VISIBLE_SLOTS) notes.push(getNextNote());
       }
     }
-
-    handleNoteInput();
+    if (!canAcceptOnset()) return;
+    const target = notes[0];
+    if (!target) return;
+    if (target.type === "note") {
+      if (noteMatches(lastDetected.midi, target.midi)) { sfxSuccess(target.midi); triggerSuccess(); }
+      else { sfxError(); triggerError(); }
+    } else {
+      const expected = target.midis[target.progress];
+      if (noteMatches(lastDetected.midi, expected)) {
+        sfxSuccess(expected);
+        target.progress++;
+        if (target.progress >= target.midis.length) triggerSuccess();
+        else { runnerAnim = "conduct"; runnerAnimT = 0; }
+      } else { sfxError(); target.progress = 0; triggerError(); }
+    }
   }
 
-  // Genera la prossima nota/accordo in base alla sezione corrente.
+  /* ---------- MODALITÀ SCORRIMENTO ---------- */
+  function updateScorrimento(dt) {
+    scrollSpeed = SCROLL_BASE_SPEED + score * 4; // accelera col punteggio
+    for (const n of scrollNotes) n.x -= scrollSpeed * dt;
+
+    // spawn a distanza costante
+    scrollSpawnX -= scrollSpeed * dt;
+    if (scrollSpawnX <= 0) {
+      const pool = cfg.whiteOnly ? WHITE_MIDIS : CHROMATIC_MIDIS;
+      scrollNotes.push({ midi: pool[Math.floor(Math.random() * pool.length)], x: W + 30 });
+      scrollSpawnX = SCROLL_SPAWN_GAP;
+    }
+
+    // la nota più vicina che ha passato il direttore senza essere suonata
+    const first = scrollNotes[0];
+    if (first && first.x < runnerX - 16) {
+      // mancata: errore, rimuovi
+      scrollNotes.shift();
+      sfxError(); triggerError();
+      return;
+    }
+
+    // input: se c'è una nota nella finestra del direttore
+    if (!canAcceptOnset()) return;
+    if (first && Math.abs(first.x - runnerX) < slotGap * 0.55) {
+      if (noteMatches(lastDetected.midi, first.midi)) {
+        sfxSuccess(first.midi);
+        scrollNotes.shift();
+        score++;
+        runnerAnim = "conduct"; runnerAnimT = 0;
+      } else {
+        sfxError(); triggerError();
+      }
+    }
+  }
+
+  /* ---------- MODALITÀ DETTATO / MEMORIA ---------- */
+  function updateDettato(dt) {
+    if (seqPhase === "listen") {
+      seqPlayTimer -= dt * 1000;
+      if (seqPlayTimer <= 0) {
+        if (seqPlayIndex < seq.length) {
+          sfxDictationNote(seq[seqPlayIndex]);
+          seqPlayIndex++;
+          seqPlayTimer = SEQ_NOTE_MS + SEQ_GAP_MS;
+        } else {
+          // finito di suonare: tocca al giocatore
+          seqPhase = "repeat";
+          seqProgress = 0;
+          armed = true;
+        }
+      }
+      return;
+    }
+    // fase repeat: ascolta gli attacchi del giocatore
+    if (!canAcceptOnset()) return;
+    const expected = seq[seqProgress];
+    if (noteMatches(lastDetected.midi, expected)) {
+      sfxSuccess(expected);
+      seqProgress++;
+      runnerAnim = "conduct"; runnerAnimT = 0;
+      if (seqProgress >= seq.length) {
+        // sequenza completata
+        sfxFanfare();
+        if (MODE === "memoria") {
+          seqMaxLen = Math.max(seqMaxLen, seq.length);
+          score = seq.length;
+          // allunga e ricomincia l'ascolto
+          if (seq.length < 8) seq.push(randSeqMidi());
+          startListen();
+        } else {
+          // dettato: nuova sequenza da 4, +1 punto
+          score++;
+          newSeq(4);
+          startListen();
+        }
+      }
+    } else {
+      sfxError();
+      if (MODE === "memoria") {
+        // un errore = game over
+        triggerError();
+      } else {
+        // dettato: ricomincia la stessa sequenza dall'ascolto, niente vite
+        flashErr = 1; runnerAnim = "stumble"; runnerAnimT = 0;
+        startListen();
+      }
+    }
+  }
+
+  function randSeqMidi() {
+    const pool = WHITE_MIDIS;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+  function newSeq(len) {
+    seq = []; for (let i = 0; i < len; i++) seq.push(randSeqMidi());
+  }
+  function startListen() {
+    seqPhase = "listen"; seqPlayIndex = 0; seqProgress = 0;
+    seqPlayTimer = 500; // piccola pausa prima di iniziare a suonare
+  }
+
+  // Filtro comune: accetta solo attacchi nuovi e confermati.
+  function canAcceptOnset() {
+    return lastDetected && lastDetected.isOnset;
+  }
+
+  // Genera la prossima nota/accordo (modalità direttore).
   function getNextNote() {
     if (section === "A") {
       const pool = cfg.whiteOnly ? WHITE_MIDIS : CHROMATIC_MIDIS;
@@ -743,62 +1045,80 @@
     }
   }
 
-  function handleNoteInput() {
-    if (!lastDetected) return;
-    if (shiftAnim > 0) return;            // mentre la coda scorre, ignora input
-    // accetta SOLO un attacco nuovo: il decay della nota precedente non conta
-    if (!lastDetected.isOnset) return;
-
-    const target = notes[0];
-    if (!target) return;
-
-    if (target.type === "note") {
-      if (noteMatches(lastDetected.midi, target.midi)) triggerSuccess();
-      else triggerError();
-    } else { // accordo arpeggiato: ogni nota richiede un attacco distinto
-      const expected = target.midis[target.progress];
-      if (noteMatches(lastDetected.midi, expected)) {
-        target.progress++;
-        if (target.progress >= target.midis.length) {
-          triggerSuccess();
-        } else {
-          // nota intermedia giusta: cenno di bacchetta, niente shift
-          runnerAnim = "conduct"; runnerAnimT = 0;
-        }
-      } else {
-        // nota sbagliata nell'arpeggio: errore e ricomincia l'accordo
-        target.progress = 0;
-        triggerError();
-      }
-    }
-  }
-
-  // SUCCESSO: colpo di bacchetta + scorrimento della coda di uno slot.
+  // SUCCESSO (direttore): colpo di bacchetta + scorrimento coda.
   function triggerSuccess() {
     score++;
     runnerAnim = "conduct"; runnerAnimT = 0;
-    shiftAnim = 1;                    // avvia lo scorrimento (animato)
+    shiftAnim = 1;
     maybeSwitchSection();
   }
 
-  // ERRORE: il direttore inciampa, flash rosso, perdi una vita.
+  // ERRORE: inciampo, flash rosso, vita persa. A zero vite -> fine partita.
   function triggerError() {
     runnerAnim = "stumble"; runnerAnimT = 0;
     flashErr = 1;
     lives--;
-    if (lives <= 0) {
-      // lascia finire un attimo l'animazione, poi game over.
-      // La guardia in endGame evita che scatti dopo un restart/uscita.
-      setTimeout(() => { if (running && lives <= 0) endGame(); }, 400);
-    }
+    if (lives <= 0) startEndSeq();
+  }
+
+  /* ---------- SEZIONI A/B (solo direttore) ---------- */
+  function maybeSwitchSection() {
+    if (MODE === "direttore" && section === "A" && score >= cfg.chordsAfterScore) section = "B";
   }
 
   /* =====================================================================
-     (5) GESTIONE SEZIONI A / B
+     SEQUENZA DI FINE PARTITA + game over
      ===================================================================== */
 
-  function maybeSwitchSection() {
-    if (section === "A" && score >= cfg.chordsAfterScore) section = "B";
+  function startEndSeq() {
+    if (gameState === "endseq" || gameState === "gameover") return;
+    gameState = "endseq";
+    endTimer = 0;
+    runnerAnim = "bow"; runnerAnimT = 0;   // il direttore si inchina
+    sfxGameOver();
+    // genera le particelle (note che cadono)
+    endParticles = [];
+    const glyphs = ["♪", "♩", "♫", "♬", "𝄞"];
+    for (let i = 0; i < 26; i++) {
+      endParticles.push({
+        x: Math.random() * W,
+        y: -20 - Math.random() * H * 0.5,
+        vy: 40 + Math.random() * 80,
+        rot: (Math.random() - 0.5) * 1.2,
+        vr: (Math.random() - 0.5) * 2,
+        size: 16 + Math.random() * 22,
+        glyph: glyphs[Math.floor(Math.random() * glyphs.length)],
+        life: 1,
+      });
+    }
+  }
+
+  function updateEndSeq(dt) {
+    runnerAnimT += dt;
+    endTimer += dt;
+    for (const p of endParticles) {
+      p.y += p.vy * dt;
+      p.rot += p.vr * dt;
+      if (p.y > H * 0.7) p.life -= dt * 0.8; // svaniscono in basso
+    }
+    if (endTimer >= END_DURATION) endGame();
+  }
+
+  function endGame() {
+    if (gameState === "gameover") return;
+    running = false; gameState = "gameover";
+    if (rafId) cancelAnimationFrame(rafId);
+    // testo finale a seconda della modalità
+    if (elFinalScore) {
+      if (MODE === "memoria") elFinalScore.textContent = String(seqMaxLen);
+      else elFinalScore.textContent = String(score);
+    }
+    if (elFinalLabel) {
+      elFinalLabel.textContent = (MODE === "memoria")
+        ? "note ricordate di fila"
+        : (score === 1 ? "battuta diretta" : "battute dirette");
+    }
+    if (elGameOver) elGameOver.classList.remove("hidden");
   }
 
   /* =====================================================================
@@ -815,22 +1135,20 @@
 
   function resetGame() {
     cfg = DIFFICULTIES[CURRENT_DIFFICULTY];
-    score = 0; lives = MAX_LIVES; section = "A";
-    // reset stato onset/audio
-    armed = true; refractoryUntil = 0; stableMidi = -1; stableCount = 0;
-    recentPeak = 0;
+    score = 0; lives = (MODE === "memoria") ? 1 : MAX_LIVES; section = "A";
+    armed = true; refractoryUntil = 0; stableMidi = -1; stableCount = 0; recentPeak = 0;
     shiftAnim = 0; runnerAnim = "idle"; runnerAnimT = 0; flashErr = 0;
-    // riempi la coda con VISIBLE_SLOTS note
-    notes = [];
-    while (notes.length < VISIBLE_SLOTS) notes.push(getNextNote());
-  }
+    notes = []; scrollNotes = []; seq = []; endParticles = [];
 
-  function endGame() {
-    if (gameState === "gameover") return;
-    running = false; gameState = "gameover";
-    if (rafId) cancelAnimationFrame(rafId);
-    if (elFinalScore) elFinalScore.textContent = String(score);
-    if (elGameOver) elGameOver.classList.remove("hidden");
+    if (MODE === "direttore") {
+      while (notes.length < VISIBLE_SLOTS) notes.push(getNextNote());
+    } else if (MODE === "scorrimento") {
+      scrollSpawnX = W * 0.6; scrollSpeed = SCROLL_BASE_SPEED;
+    } else if (MODE === "dettato") {
+      newSeq(4); startListen();
+    } else if (MODE === "memoria") {
+      seqMaxLen = 0; newSeq(2); startListen();
+    }
   }
 
   // Restart: riusa l'AudioContext, riparte direttamente dal gioco.
@@ -848,8 +1166,10 @@
     stopCalibration();
     gameState = "idle";
     if (elGameOver) elGameOver.classList.add("hidden");
+    if (elCalibScreen) elCalibScreen.classList.add("hidden");
+    if (elSelectScreen) elSelectScreen.classList.add("hidden");
     if (elStart) elStart.classList.remove("hidden");
-    if (elStartBtn) { elStartBtn.disabled = false; elStartBtn.textContent = "Sali sul podio"; }
+    if (elStartBtn) { elStartBtn.disabled = false; elStartBtn.textContent = "Inizia"; }
   }
   // esposta globalmente così il router/altri bottoni possono fermare il gioco
   window.stopPianoforte = stopPianoforte;
@@ -964,9 +1284,34 @@
           <p class="pf-eyebrow">Sala 131 · il Pianoforte</p>
           <h1 class="pf-title">Il Direttore</h1>
           <div class="pf-rule"></div>
-          <p class="pf-subtitle">Davanti a te, una nota sul pentagramma.<br>Suonala al pianoforte per dirigerla.<br>Sbaglia, e il direttore inciampa.</p>
-          <button id="startBtn" class="pf-bigBtn">Sali sul podio</button>
+          <p class="pf-subtitle">Leggi le note sul pentagramma<br>e suonale al pianoforte.</p>
+          <button id="startBtn" class="pf-bigBtn">Inizia</button>
           <p class="pf-hint">Tieni il telefono orizzontale, appoggiato sul pianoforte. Useremo il microfono.</p>
+          <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna indietro</button>
+        </div>
+
+        <div id="selectScreen" class="pf-overlay hidden">
+          <p class="pf-eyebrow">Scegli la prova</p>
+          <h2 class="pf-title pf-title--sm">Quattro modi di leggere</h2>
+          <div class="pf-rule"></div>
+          <div class="pf-modeGrid">
+            <button class="pf-mode" data-mode="direttore">
+              <span class="pf-mode-name">Direttore</span>
+              <span class="pf-mode-desc">Una nota alla volta, con calma. La suoni e avanzi.</span>
+            </button>
+            <button class="pf-mode" data-mode="scorrimento">
+              <span class="pf-mode-name">Scorrimento</span>
+              <span class="pf-mode-desc">Le note arrivano da destra: suonale prima che ti raggiungano.</span>
+            </button>
+            <button class="pf-mode" data-mode="dettato">
+              <span class="pf-mode-name">Dettato</span>
+              <span class="pf-mode-desc">Il pianoforte suona quattro note. Tu le ripeti a orecchio.</span>
+            </button>
+            <button class="pf-mode" data-mode="memoria">
+              <span class="pf-mode-name">Memoria</span>
+              <span class="pf-mode-desc">Come il dettato, ma la sequenza si allunga. Fino a dove arrivi?</span>
+            </button>
+          </div>
           <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna indietro</button>
         </div>
 
@@ -1007,8 +1352,11 @@
           <p class="pf-eyebrow">Fine del concerto</p>
           <h2 class="pf-title pf-title--sm">Sipario</h2>
           <div class="pf-rule"></div>
-          <p class="pf-subtitle">Hai diretto <span id="finalScore">0</span> battute.</p>
-          <button id="restartBtn" class="pf-bigBtn">Da capo</button>
+          <p class="pf-subtitle"><span id="finalScore" class="pf-finalNum">0</span><br><span id="finalLabel">battute dirette</span></p>
+          <div class="pf-btnRow">
+            <button id="restartBtn" class="pf-bigBtn">Da capo</button>
+            <button id="changeModeBtn" class="pf-bigBtn pf-bigBtn--ghost">Cambia prova</button>
+          </div>
           <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna indietro</button>
         </div>
 
@@ -1024,9 +1372,12 @@
     ctx = canvas.getContext("2d");
     elStart = document.getElementById("startScreen");
     elStartBtn = document.getElementById("startBtn");
+    elSelectScreen = document.getElementById("selectScreen");
     elGameOver = document.getElementById("gameOverScreen");
     elRestartBtn = document.getElementById("restartBtn");
+    elChangeModeBtn = document.getElementById("changeModeBtn");
     elFinalScore = document.getElementById("finalScore");
+    elFinalLabel = document.getElementById("finalLabel");
     elDebug = document.getElementById("debugPanel");
 
     elCalibScreen = document.getElementById("calibScreen");
@@ -1046,20 +1397,32 @@
     return true;
   }
 
+  // "Inizia": chiede il microfono, poi mostra la scelta della modalità.
   async function onStartTap() {
     elStartBtn.disabled = true;
     elStartBtn.textContent = "Un momento…";
     gameState = "permissions";
 
     const audioOk = await initAudio();
-    if (!audioOk) { elStartBtn.disabled = false; elStartBtn.textContent = "Sali sul podio"; return; }
+    if (!audioOk) { elStartBtn.disabled = false; elStartBtn.textContent = "Inizia"; return; }
 
     elStart.classList.add("hidden");
-    startCalibration();   // microfono ok -> prova/accordatura -> gioco
+    showModeSelect();
   }
 
-  // PUNTO DI INGRESSO dal router. IDEMPOTENTE: il router lo chiama ogni
-  // volta che si entra nella stanza, anche al ritorno dal menu.
+  function showModeSelect() {
+    gameState = "select";
+    if (elSelectScreen) elSelectScreen.classList.remove("hidden");
+  }
+
+  // scelta modalità -> calibrazione -> gioco
+  function onModeChosen(mode) {
+    MODE = mode;
+    if (elSelectScreen) elSelectScreen.classList.add("hidden");
+    startCalibration();
+  }
+
+  // PUNTO DI INGRESSO dal router. IDEMPOTENTE.
   function avviaPianoforteInit() {
     if (!document.getElementById("gameCanvas")) creaPianoforte();
     if (!cacheElements()) return;
@@ -1071,7 +1434,6 @@
         resizeCanvas();
         if (gameState !== "playing") render();
       });
-      // su mobile il cambio orientamento arriva con un evento dedicato
       window.addEventListener("orientationchange", () => {
         setTimeout(() => { resizeCanvas(); if (gameState !== "playing") render(); }, 200);
       });
@@ -1080,14 +1442,19 @@
 
     if (elStartBtn) elStartBtn.onclick = onStartTap;
     if (elRestartBtn) elRestartBtn.onclick = restartGame;
+    if (elChangeModeBtn) elChangeModeBtn.onclick = () => {
+      if (elGameOver) elGameOver.classList.add("hidden");
+      showModeSelect();
+    };
+    // bottoni di scelta modalità
+    const modeBtns = document.querySelectorAll("#pianoforte .pf-mode");
+    modeBtns.forEach(b => { b.onclick = () => onModeChosen(b.getAttribute("data-mode")); });
 
     stopPianoforte(); // stato pulito alla (ri)entrata
     render();
   }
   window.avviaPianoforteInit = avviaPianoforteInit;
 
-  // L'HTML del sito ha un onclick="avviaPianoforte()" (vecchio nome).
-  // Alias per non lasciare un riferimento rotto.
   window.avviaPianoforte = function () {
     if (elStartBtn) onStartTap();
   };
