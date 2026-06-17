@@ -1,7 +1,10 @@
 /* =====================================================================
    SOUNDWALK — STANZA 131 · IL PIANOFORTE
    Endless runner musicale. Il terreno è un pentagramma; gli ostacoli
-   sono note vere che vanno suonate sul pianoforte per saltarle.
+   Gioco musicale "direttore d'orchestra". C'è una fila di note sul
+   pentagramma; quella davanti al direttore va suonata sul pianoforte vero.
+   Nota giusta -> colpo di bacchetta e la fila avanza. Nota sbagliata ->
+   il direttore inciampa e perde una vita. Nessuna pressione temporale.
 
    Tutto vanilla JS. Nessuna dipendenza.
 
@@ -121,13 +124,30 @@
   // mondo di gioco
   let cfg = DIFFICULTIES[CURRENT_DIFFICULTY];
   let staffY = 0, lineGap = 0, runnerX = 0;
-  let obstacles = [], score = 0, section = "A";
-  let nextSpawnX = 0, runFrame = 0, worldOffset = 0;
+  let section = "A";
+  let score = 0, lives = 3;
+  const MAX_LIVES = 3;
+  let runFrame = 0;
 
-  let runner = { y: 0, vy: 0, jumping: false, baseY: 0 };
-  const GRAVITY = 1700;
+  // --- Coda di note a SLOT fissi (niente scorrimento temporale) ---
+  // notes[0] è la nota davanti all'omino (il target corrente). Le altre
+  // sono in fila a destra. Quando si indovina, tutta la coda scorre di uno
+  // slot a sinistra con un'animazione, e ne entra una nuova in fondo.
+  let notes = [];            // ogni nota: { midi } oppure { midis, progress, label } per accordo
+  const VISIBLE_SLOTS = 5;   // quante note tenere in fila
+  let slotGap = 0;           // distanza orizzontale tra slot (calcolata in resize)
 
-  let lastMatchedMidi = -1, noteReleased = true;
+  // animazione di scorrimento della coda (shift) e feedback omino
+  let shiftAnim = 0;         // 0 = fermo; 1 -> 0 mentre la coda scorre di uno slot
+  const SHIFT_TIME = 0.28;   // durata scorrimento (s)
+  // stato animazione direttore: idle | conduct (successo) | stumble (errore)
+  let runnerAnim = "idle";
+  let runnerAnimT = 0;       // tempo trascorso nell'animazione corrente
+  const CONDUCT_TIME = 0.45;
+  const STUMBLE_TIME = 0.55;
+  let flashErr = 0;          // breve flash rosso su errore
+
+  let noteReleased = true;   // edge detection: una nota va rilasciata prima della prossima
 
   /* =====================================================================
      (1) SETUP AUDIO + PITCH DETECTION
@@ -304,7 +324,8 @@
     lineGap = Math.max(14, Math.round(H * 0.045));
     staffY = Math.round(H * 0.62);
     runnerX = Math.round(W * 0.18);
-    runner.baseY = staffY - lineGap * 2; // appoggiato alla linea centrale
+    // distanza tra le note in fila: lo spazio da runner al bordo destro / slot
+    slotGap = Math.max(70, Math.round((W - runnerX - 30) / VISIBLE_SLOTS));
   }
 
   function midiToStaffY(midi) {
@@ -334,17 +355,22 @@
     ctx.fillRect(0, 0, W, H);
     drawBackground();
     drawStaff();
-    drawObstacles();
+    drawNotes();
     drawRunner();
     drawHud();
+    // breve flash rosso su errore
+    if (flashErr > 0) {
+      ctx.fillStyle = "rgba(239,71,111," + (flashErr * 0.35).toFixed(3) + ")";
+      ctx.fillRect(0, 0, W, H);
+    }
   }
 
   function drawBackground() {
     ctx.fillStyle = "#1b2350";
     for (let i = 0; i < 30; i++) {
-      const x = (i * 53 + (worldOffset * 0.2)) % W;
+      const x = (i * 53) % W;
       const y = (i * 37) % (H * 0.5);
-      ctx.fillRect(Math.round((W - x)), Math.round(y), 2, 2);
+      ctx.fillRect(Math.round(x), Math.round(y), 2, 2);
     }
     ctx.fillStyle = "#161a3a";
     ctx.fillRect(0, staffY + lineGap * 3, W, H);
@@ -375,25 +401,36 @@
     ctx.restore();
   }
 
-  function drawObstacles() {
-    for (const ob of obstacles) {
-      if (ob.type === "note") {
-        drawNoteHead(ob.x, midiToStaffY(ob.midi), ob.midi, ob.done);
-        if (cfg.showName) drawNoteLabel(ob.x, midiToStaffY(ob.midi), ob.midi);
-        drawLedgerLines(ob.x, ob.midi);
-      } else if (ob.type === "chord") {
-        for (let k = 0; k < ob.midis.length; k++) {
-          const m = ob.midis[k];
-          drawNoteHead(ob.x, midiToStaffY(m), m, k < ob.progress);
-          drawLedgerLines(ob.x, m);
+  // Posizione X di uno slot, tenendo conto dell'animazione di scorrimento.
+  // Durante lo shift le note "scivolano" da uno slot al precedente.
+  function slotX(index) {
+    // shiftAnim va da 1 (appena indovinato) a 0 (fermo): le note partono
+    // dallo slot index+1 e arrivano a index.
+    return runnerX + (index + shiftAnim) * slotGap;
+  }
+
+  function drawNotes() {
+    for (let i = 0; i < notes.length; i++) {
+      const n = notes[i];
+      const x = slotX(i);
+      if (x > W + 40) continue; // fuori schermo a destra
+      const isTarget = (i === 0);
+      if (n.type === "note") {
+        drawNoteHead(x, midiToStaffY(n.midi), n.midi, isTarget);
+        drawLedgerLines(x, n.midi);
+        if (cfg.showName) drawNoteLabel(x, midiToStaffY(n.midi), n.midi);
+      } else { // accordo
+        for (let k = 0; k < n.midis.length; k++) {
+          drawNoteHead(x, midiToStaffY(n.midis[k]), n.midis[k], isTarget && k < n.progress);
+          drawLedgerLines(x, n.midis[k]);
         }
         if (cfg.showName) {
-          const topM = Math.max(...ob.midis);
+          const topM = Math.max(...n.midis);
           ctx.fillStyle = "#ffffff"; ctx.font = "bold 13px monospace"; ctx.textAlign = "center";
-          ctx.fillText(ob.label, ob.x, midiToStaffY(topM) - 26);
+          ctx.fillText(n.label, x, midiToStaffY(topM) - 26);
           ctx.font = "11px monospace";
-          const seq = ob.midis.map((m, i) => (i < ob.progress ? "•" : midiToNote(m).name)).join(" ");
-          ctx.fillText(seq, ob.x, midiToStaffY(topM) - 12);
+          const seq = n.midis.map((m, j) => (isTarget && j < n.progress ? "•" : midiToNote(m).name)).join(" ");
+          ctx.fillText(seq, x, midiToStaffY(topM) - 12);
         }
       }
     }
@@ -435,34 +472,121 @@
     }
   }
 
+  // Omino DIRETTORE D'ORCHESTRA con bacchetta.
+  // Stati: idle (oscilla piano), conduct (colpo di bacchetta = successo),
+  // stumble (inciampa all'indietro = errore).
   function drawRunner() {
-    const x = runnerX, y = runner.baseY + runner.y;
-    ctx.save(); ctx.translate(x, y);
-    const c = "#06d6a0", dark = "#048a67";
-    ctx.fillStyle = c;
-    ctx.fillRect(-8, -22, 16, 16);   // corpo
-    ctx.fillRect(-6, -34, 12, 12);   // testa
-    ctx.fillStyle = "#10122b"; ctx.fillRect(2, -31, 3, 3); // occhio
-    ctx.fillStyle = c;
-    if (runner.jumping) {
-      ctx.fillStyle = dark; ctx.fillRect(-8, -6, 6, 6); ctx.fillRect(2, -6, 6, 6);
-      ctx.fillStyle = c; ctx.fillRect(-12, -20, 4, 8); ctx.fillRect(8, -20, 4, 8);
-    } else {
-      const f = Math.floor(runFrame / 8) % 2;
-      ctx.fillStyle = dark;
-      if (f === 0) { ctx.fillRect(-8, -6, 6, 8); ctx.fillRect(2, -6, 6, 4); }
-      else { ctx.fillRect(-8, -6, 6, 4); ctx.fillRect(2, -6, 6, 8); }
-      ctx.fillStyle = c; ctx.fillRect(-11, -20, 4, 7); ctx.fillRect(7, -20, 4, 7);
+    // Y a terra: appoggiato sulla linea centrale del pentagramma.
+    const groundY = staffY - lineGap * 2;
+    let bob = 0, lean = 0, batonAngle = -0.6, hop = 0;
+
+    if (runnerAnim === "idle") {
+      bob = Math.sin(runFrame * 0.12) * 2;        // respiro leggero
+      batonAngle = -0.6 + Math.sin(runFrame * 0.12) * 0.12;
+    } else if (runnerAnim === "conduct") {
+      // colpo di bacchetta: parte alto, scende deciso verso la nota
+      const t = Math.min(1, runnerAnimT / CONDUCT_TIME);
+      const swing = Math.sin(t * Math.PI);        // 0->1->0
+      batonAngle = -1.1 + swing * 1.9;            // sferzata verso il basso/avanti
+      hop = -Math.sin(t * Math.PI) * 10;          // piccolo balzo di entusiasmo
+      lean = swing * 0.12;
+    } else if (runnerAnim === "stumble") {
+      // inciampo: si piega all'indietro e barcolla
+      const t = Math.min(1, runnerAnimT / STUMBLE_TIME);
+      lean = -Math.sin(t * Math.PI) * 0.4;        // si butta indietro
+      bob = Math.sin(t * Math.PI * 3) * 3;        // tremolio
+      batonAngle = -0.6 - Math.sin(t * Math.PI) * 0.8;
     }
+
+    const x = runnerX, y = groundY + hop + bob;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(lean);
+
+    const c = "#06d6a0", dark = "#048a67", skin = "#ffd9a6";
+
+    // gambe
+    ctx.fillStyle = dark;
+    if (runnerAnim === "stumble") {
+      ctx.fillRect(-9, -6, 6, 8); ctx.fillRect(3, -6, 6, 6); // gambe scomposte
+    } else {
+      ctx.fillRect(-8, -6, 6, 7); ctx.fillRect(2, -6, 6, 7);
+    }
+    // corpo (frac da direttore)
+    ctx.fillStyle = "#10122b";
+    ctx.fillRect(-9, -23, 18, 17);
+    // camicia bianca al centro
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(-3, -22, 6, 12);
+    // testa
+    ctx.fillStyle = skin;
+    ctx.fillRect(-6, -35, 12, 12);
+    // capelli
+    ctx.fillStyle = "#3a2a18";
+    ctx.fillRect(-6, -35, 12, 4);
+    // occhio (guarda avanti, verso la nota)
+    ctx.fillStyle = "#10122b";
+    ctx.fillRect(3, -31, 2, 3);
+
+    // braccio sinistro (dietro)
+    ctx.fillStyle = "#10122b";
+    ctx.fillRect(-12, -20, 4, 8);
+
+    // braccio destro che impugna la BACCHETTA (verso la nota)
+    ctx.save();
+    ctx.translate(8, -19);          // spalla destra
+    ctx.rotate(batonAngle);
+    // avambraccio
+    ctx.fillStyle = "#10122b";
+    ctx.fillRect(0, -2, 9, 4);
+    // mano
+    ctx.fillStyle = skin;
+    ctx.fillRect(8, -2, 4, 4);
+    // bacchetta bianca
+    ctx.strokeStyle = "#fff8e7";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(11, 0);
+    ctx.lineTo(30, 0);
+    ctx.stroke();
+    // punta della bacchetta
+    ctx.fillStyle = "#ffd166";
+    ctx.beginPath(); ctx.arc(30, 0, 2.5, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
+
+    ctx.restore();
+
+    // scintille sul colpo di bacchetta riuscito
+    if (runnerAnim === "conduct") {
+      const t = Math.min(1, runnerAnimT / CONDUCT_TIME);
+      const sparkX = runnerX + 34, sparkY = groundY - 18;
+      ctx.fillStyle = "rgba(255,209,102," + (1 - t).toFixed(2) + ")";
+      for (let s = 0; s < 5; s++) {
+        const a = (s / 5) * Math.PI * 2 + t * 3;
+        const r = 6 + t * 16;
+        ctx.fillRect(Math.round(sparkX + Math.cos(a) * r), Math.round(sparkY + Math.sin(a) * r), 3, 3);
+      }
+    }
   }
 
   function drawHud() {
     ctx.fillStyle = "#ffffff"; ctx.font = "bold 18px monospace"; ctx.textAlign = "left";
     ctx.fillText("Punti: " + score, 12, 28);
-    ctx.textAlign = "right"; ctx.fillText("Sez. " + section, W - 12, 28);
-    const target = getActiveTarget();
-    if (target) {
+
+    // vite a forma di cuoricino pixel, in alto a destra
+    ctx.textAlign = "right";
+    let hearts = "";
+    for (let i = 0; i < MAX_LIVES; i++) hearts += (i < lives ? "♥" : "·");
+    ctx.fillStyle = "#ef476f";
+    ctx.fillText(hearts, W - 12, 28);
+
+    // sezione (piccola, sotto le vite)
+    ctx.fillStyle = "#6b76b8"; ctx.font = "12px monospace";
+    ctx.fillText("Sez. " + section, W - 12, 46);
+
+    // nota target corrente = notes[0]
+    const target = notes[0];
+    if (target && shiftAnim === 0) {
       ctx.textAlign = "center"; ctx.fillStyle = "#ffd166"; ctx.font = "bold 16px monospace";
       let txt;
       if (target.type === "note") txt = "Suona: " + midiToNote(target.midi).name;
@@ -473,95 +597,108 @@
 
   /* =====================================================================
      (4) LOGICA DI GIOCO / PUNTEGGIO
+     Modello SLOT-BASED: nessuna pressione temporale.
+       - notes[0] è la nota davanti al direttore (il target).
+       - suoni giusta -> animazione "conduct" + la coda scorre di uno slot
+         (shiftAnim) + nuova nota in fondo + punto.
+       - suoni sbagliata -> animazione "stumble" + perdi una vita. La coda
+         NON scorre: resti sulla stessa nota finché non la indovini.
      ===================================================================== */
 
   function update(dt) {
     runFrame++;
-    const speed = cfg.scrollSpeed;
-    worldOffset += speed * dt;
-    for (const ob of obstacles) ob.x -= speed * dt;
 
-    nextSpawnX -= speed * dt;
-    if (nextSpawnX <= 0) { spawnObstacle(); nextSpawnX = cfg.spawnGapPx; }
+    // avanzamento animazioni (indipendenti dal gameplay, solo estetica)
+    if (runnerAnim !== "idle") {
+      runnerAnimT += dt;
+      const dur = runnerAnim === "conduct" ? CONDUCT_TIME : STUMBLE_TIME;
+      if (runnerAnimT >= dur) { runnerAnim = "idle"; runnerAnimT = 0; }
+    }
+    if (flashErr > 0) flashErr = Math.max(0, flashErr - dt / 0.35);
 
-    handleNoteInput();
-
-    if (runner.jumping) {
-      runner.vy += GRAVITY * dt;
-      runner.y += runner.vy * dt;
-      if (runner.y >= 0) { runner.y = 0; runner.vy = 0; runner.jumping = false; }
+    // animazione di scorrimento della coda: shiftAnim cala da 1 a 0
+    if (shiftAnim > 0) {
+      shiftAnim = Math.max(0, shiftAnim - dt / SHIFT_TIME);
+      if (shiftAnim === 0) {
+        // scorrimento finito: rimuovi la nota suonata e rifornisci la coda
+        notes.shift();
+        while (notes.length < VISIBLE_SLOTS) notes.push(getNextNote());
+      }
     }
 
-    checkCollisions();
-    obstacles = obstacles.filter(ob => ob.x > -40);
+    handleNoteInput();
   }
 
-  function triggerJump(midi) {
-    if (runner.jumping) return;
-    runner.jumping = true;
-    const t = Math.max(0, Math.min(1, (midi - 60) / 23));
-    runner.vy = -(620 + 180 * t);
+  // Genera la prossima nota/accordo in base alla sezione corrente.
+  function getNextNote() {
+    if (section === "A") {
+      const pool = cfg.whiteOnly ? WHITE_MIDIS : CHROMATIC_MIDIS;
+      return { type: "note", midi: pool[Math.floor(Math.random() * pool.length)] };
+    } else {
+      const root = CHORD_ROOTS[Math.floor(Math.random() * CHORD_ROOTS.length)];
+      const shape = CHORD_SHAPES[Math.floor(Math.random() * CHORD_SHAPES.length)];
+      const midis = shape.intervals.map(iv => root + iv);
+      return { type: "chord", midis, progress: 0, label: midiToNote(root).name + " " + shape.name };
+    }
   }
-
-  function getActiveTarget() {
-    for (const ob of obstacles) if (!ob.done && ob.x > runnerX - 60) return ob;
-    return null;
-  }
-
-  const HIT_WINDOW = 90; // px
 
   function handleNoteInput() {
     if (!lastDetected) return;
-    const target = getActiveTarget();
+    if (shiftAnim > 0) return;        // mentre la coda scorre, ignora input
+    const target = notes[0];
     if (!target) return;
-    if (Math.abs(target.x - runnerX) > HIT_WINDOW) return;
+    if (!noteReleased) return;        // serve un "rilascio" tra due note
 
     if (target.type === "note") {
-      if (!noteReleased) return;
       if (noteMatches(lastDetected.midi, target.midi)) {
-        target.done = true; score++; triggerJump(target.midi);
-        noteReleased = false; lastMatchedMidi = lastDetected.midi;
-        maybeSwitchSection();
+        triggerSuccess();
+      } else {
+        triggerError();
       }
-    } else if (target.type === "chord") {
-      if (!noteReleased) return;
+      noteReleased = false;
+    } else { // accordo arpeggiato
       const expected = target.midis[target.progress];
       if (noteMatches(lastDetected.midi, expected)) {
-        target.progress++; noteReleased = false; lastMatchedMidi = lastDetected.midi;
+        target.progress++;
+        noteReleased = false;
         if (target.progress >= target.midis.length) {
-          target.done = true; score++; triggerJump(Math.max(...target.midis));
-          maybeSwitchSection();
+          triggerSuccess();
+        } else {
+          // nota intermedia giusta: piccolo cenno di bacchetta, niente shift
+          runnerAnim = "conduct"; runnerAnimT = 0;
         }
+      } else {
+        // nota sbagliata nell'arpeggio: errore e ricomincia l'accordo
+        target.progress = 0;
+        triggerError();
+        noteReleased = false;
       }
     }
   }
 
-  function checkCollisions() {
-    for (const ob of obstacles) {
-      if (ob.done) continue;
-      if (ob.x - runnerX < -12 && !runner.jumping) { endGame(); return; }
+  // SUCCESSO: colpo di bacchetta + scorrimento della coda di uno slot.
+  function triggerSuccess() {
+    score++;
+    runnerAnim = "conduct"; runnerAnimT = 0;
+    shiftAnim = 1;                    // avvia lo scorrimento (animato)
+    maybeSwitchSection();
+  }
+
+  // ERRORE: il direttore inciampa, flash rosso, perdi una vita.
+  function triggerError() {
+    runnerAnim = "stumble"; runnerAnimT = 0;
+    flashErr = 1;
+    lives--;
+    if (lives <= 0) {
+      // lascia finire un attimo l'animazione, poi game over.
+      // La guardia in endGame evita che scatti dopo un restart/uscita.
+      setTimeout(() => { if (running && lives <= 0) endGame(); }, 400);
     }
   }
 
   /* =====================================================================
      (5) GESTIONE SEZIONI A / B
      ===================================================================== */
-
-  function notedPool() { return cfg.whiteOnly ? WHITE_MIDIS : CHROMATIC_MIDIS; }
-
-  function spawnObstacle() {
-    const spawnX = W + 30;
-    if (section === "A") {
-      const pool = notedPool();
-      obstacles.push({ type: "note", x: spawnX, midi: pool[Math.floor(Math.random() * pool.length)], done: false });
-    } else {
-      const root = CHORD_ROOTS[Math.floor(Math.random() * CHORD_ROOTS.length)];
-      const shape = CHORD_SHAPES[Math.floor(Math.random() * CHORD_SHAPES.length)];
-      const midis = shape.intervals.map(iv => root + iv);
-      obstacles.push({ type: "chord", x: spawnX, midis, progress: 0, done: false,
-                       label: midiToNote(root).name + " " + shape.name });
-    }
-  }
 
   function maybeSwitchSection() {
     if (section === "A" && score >= cfg.chordsAfterScore) section = "B";
@@ -582,13 +719,16 @@
 
   function resetGame() {
     cfg = DIFFICULTIES[CURRENT_DIFFICULTY];
-    obstacles = []; score = 0; section = "A"; worldOffset = 0;
-    nextSpawnX = Math.round(W * 0.6);
-    runner.y = 0; runner.vy = 0; runner.jumping = false;
-    noteReleased = true; lastMatchedMidi = -1;
+    score = 0; lives = MAX_LIVES; section = "A";
+    noteReleased = true;
+    shiftAnim = 0; runnerAnim = "idle"; runnerAnimT = 0; flashErr = 0;
+    // riempi la coda con VISIBLE_SLOTS note
+    notes = [];
+    while (notes.length < VISIBLE_SLOTS) notes.push(getNextNote());
   }
 
   function endGame() {
+    if (gameState === "gameover") return;
     running = false; gameState = "gameover";
     if (rafId) cancelAnimationFrame(rafId);
     if (elFinalScore) elFinalScore.textContent = String(score);
@@ -713,7 +853,7 @@
 
         <div id="startScreen" class="pf-overlay">
           <h1 class="pf-title">IL PIANOFORTE</h1>
-          <p class="pf-subtitle">Corri sul pentagramma.<br>Suona le note per saltarle.</p>
+          <p class="pf-subtitle">Sei il direttore d'orchestra.<br>Suona la nota giusta per dirigerla.</p>
           <button id="startBtn" class="pf-bigBtn">Avvia</button>
           <p class="pf-hint">Servono microfono e sensori del telefono.</p>
           <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna indietro</button>

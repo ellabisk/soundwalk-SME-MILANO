@@ -182,3 +182,92 @@
   #pianoforte .pf-subtitle { margin-bottom: 18px; }
   #pianoforte .pf-phoneIcon { font-size: 48px; }
 }
+
+/* =====================================================================
+   CALIBRAZIONE MICROFONO
+   ===================================================================== */
+
+/* barra VU */
+#pianoforte .pf-vuWrap {
+  width: 80%;
+  max-width: 320px;
+  height: 22px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 2px solid #aab4f0;
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 4px 0 14px;
+}
+
+#pianoforte .pf-vuBar {
+  height: 100%;
+  width: 0%;
+  background: #ef476f;
+  transition: width 0.06s linear, background 0.1s;
+}
+
+#pianoforte .pf-calibReadout {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #ffffff;
+  margin-bottom: 20px;
+}
+
+#pianoforte .pf-calibReadout span {
+  color: #ffd166;
+  font-weight: bold;
+}
+
+/* righe slider */
+#pianoforte .pf-sliderRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 85%;
+  max-width: 340px;
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+#pianoforte .pf-sliderRow label {
+  flex: 0 0 96px;
+  text-align: right;
+  color: #aab4f0;
+}
+
+#pianoforte .pf-slider {
+  flex: 1 1 auto;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: #333a5c;
+  outline: none;
+}
+
+#pianoforte .pf-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #06d6a0;
+  border: 2px solid #048a67;
+  cursor: pointer;
+}
+
+#pianoforte .pf-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #06d6a0;
+  border: 2px solid #048a67;
+  cursor: pointer;
+}
+
+#pianoforte .pf-sliderVal {
+  flex: 0 0 48px;
+  text-align: left;
+  color: #ffd166;
+  font-weight: bold;
+}
