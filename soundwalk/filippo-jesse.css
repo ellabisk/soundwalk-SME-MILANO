@@ -1,5 +1,5 @@
 /* =====================================================================
-   SOUNDWALK — SALA 131 · IL PIANOFORTE
+   SOUNDWALK â€” SALA 131 Â· IL PIANOFORTE
    Estetica "Notturno del copista": manoscritto musicale visto di notte.
    Carta blu-notte invecchiata, inchiostro avorio, accenti ametista/oro,
    tipografia serif (Cormorant Garamond + EB Garamond).
@@ -8,7 +8,7 @@
    ellastyle.css e aurorastyle.css.
    ===================================================================== */
 
-/* I font arrivano da Google Fonts (il sito è su HTTPS, GitHub Pages). */
+/* I font arrivano da Google Fonts (il sito Ã¨ su HTTPS, GitHub Pages). */
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=EB+Garamond:ital@0;1&display=swap');
 
 /* palette come variabili, riusate anche dal canvas via JS (PAL) */
@@ -70,8 +70,8 @@
     radial-gradient(ellipse 100% 70% at 50% 45%, rgba(19,36,58,0.55), transparent 70%),
     rgba(13,27,42,0.93);
   z-index: 10;
-  /* in landscape lo spazio verticale è poco: consenti lo scroll interno
-     così bottoni e slider non finiscono mai fuori dallo schermo */
+  /* in landscape lo spazio verticale Ã¨ poco: consenti lo scroll interno
+     cosÃ¬ bottoni e slider non finiscono mai fuori dallo schermo */
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
@@ -115,7 +115,7 @@
   position: relative;
 }
 #pianoforte .pf-rule::after {
-  content: "❦";
+  content: "â¦";
   position: absolute;
   top: 50%;
   left: 50%;
@@ -207,7 +207,7 @@
   line-height: 1;
 }
 
-/* ---------- Griglia di selezione modalità ---------- */
+/* ---------- Griglia di selezione modalitÃ  ---------- */
 #pianoforte .pf-modeGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
