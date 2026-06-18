@@ -119,6 +119,10 @@
   let elSelectScreen, elChangeModeBtn, elFinalLabel;
   let elGameOver, elRestartBtn, elFinalScore, elDebug;
 
+  // barra di controllo in-game + overlay di pausa
+  let elGameBar, elPauseBtn, elExitBtn;
+  let elPauseScreen, elResumeBtn, elPauseModeBtn;
+
   // schermata di calibrazione microfono
   let elCalibScreen, elCalibVu, elCalibNote, elCalibRms, elCalibClarity;
   let elRmsSlider, elRmsVal, elClaritySlider, elClarityVal, elCalibContinue;
@@ -157,6 +161,8 @@
 
   // game loop
   let rafId = null, lastTs = 0, running = false;
+  let paused = false;     // pausa durante "playing": il loop continua a girare
+                          // ma update() è congelato (così non perdo lo stato)
   let gameState = "idle"; // idle | select | permissions | calibrating | playing | endseq | gameover
 
   // --- MODALITÀ DI GIOCO ---
@@ -241,6 +247,22 @@
       console.error("Errore audio:", err);
       alert("Permesso microfono negato o non disponibile. Il gioco ha bisogno del microfono.");
       return false;
+    }
+  }
+
+  // Spegne il microfono: ferma le tracce audio (la spia del mic si spegne)
+  // e azzera i riferimenti. initAudio() ricrea tutto al rientro, perciò
+  // questa va chiamata SOLO all'uscita dalla stanza, non in pausa.
+  function releaseMic() {
+    if (micStream) {
+      micStream.getTracks().forEach(t => t.stop());
+      micStream = null;
+    }
+    analyser = null;
+    lastDetected = null;
+    if (audioCtx && audioCtx.state !== "closed") {
+      audioCtx.close().catch(() => {});
+      audioCtx = null;
     }
   }
 
@@ -881,6 +903,7 @@
      ===================================================================== */
 
   function update(dt) {
+    if (paused) return;   // in pausa: lo stato resta congelato
     runFrame++;
 
     // animazioni del direttore
@@ -1106,8 +1129,9 @@
 
   function endGame() {
     if (gameState === "gameover") return;
-    running = false; gameState = "gameover";
+    running = false; gameState = "gameover"; paused = false;
     if (rafId) cancelAnimationFrame(rafId);
+    if (elGameBar) elGameBar.classList.add("hidden");
     // testo finale a seconda della modalità
     if (elFinalScore) {
       if (MODE === "memoria") elFinalScore.textContent = String(seqMaxLen);
@@ -1127,10 +1151,35 @@
 
   function beginPlaying() {
     gameState = "playing";
+    paused = false;
     resetGame();
     running = true;
     lastTs = performance.now();
+    updateGameBar();
     rafId = requestAnimationFrame(loop);
+  }
+
+  /* ---------- PAUSA ---------- */
+  // Mostra/nasconde la barra in-game (Pausa + Esci) a seconda dello stato.
+  function updateGameBar() {
+    const inGame = (gameState === "playing" || gameState === "endseq");
+    if (elGameBar) elGameBar.classList.toggle("hidden", !inGame);
+  }
+
+  function pauseGame() {
+    if (gameState !== "playing" || paused) return;
+    paused = true;
+    if (elPauseScreen) elPauseScreen.classList.remove("hidden");
+    // sospendo l'audio context così non resta attivo inutilmente in pausa
+    if (audioCtx && audioCtx.state === "running") audioCtx.suspend();
+  }
+
+  function resumeGame() {
+    if (!paused) return;
+    paused = false;
+    if (elPauseScreen) elPauseScreen.classList.add("hidden");
+    if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+    lastTs = performance.now(); // evita un dt enorme al primo frame dopo la pausa
   }
 
   function resetGame() {
@@ -1158,14 +1207,19 @@
     beginPlaying();
   }
 
-  // Pulizia all'uscita dalla stanza: ferma il loop, riporta la UI alla
-  // schermata iniziale. NON distrugge l'AudioContext (riusabile).
+  // Pulizia all'uscita dalla stanza: ferma il loop, rilascia il microfono
+  // e riporta la UI alla schermata iniziale. Al rientro initAudio() ricrea
+  // l'audio e richiede di nuovo il permesso del microfono.
   function stopPianoforte() {
     running = false;
+    paused = false;
     if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
     stopCalibration();
+    releaseMic();   // uscita dalla stanza: spegne il microfono (spia off)
     gameState = "idle";
     if (elGameOver) elGameOver.classList.add("hidden");
+    if (elPauseScreen) elPauseScreen.classList.add("hidden");
+    if (elGameBar) elGameBar.classList.add("hidden");
     if (elCalibScreen) elCalibScreen.classList.add("hidden");
     if (elSelectScreen) elSelectScreen.classList.add("hidden");
     if (elStart) elStart.classList.remove("hidden");
@@ -1280,6 +1334,23 @@
       <div id="pianoApp">
         <canvas id="gameCanvas"></canvas>
 
+        <div id="gameBar" class="pf-gamebar hidden">
+          <button id="pauseBtn" class="pf-iconbtn" aria-label="Pausa">‖</button>
+          <button id="exitBtn" class="pf-iconbtn" aria-label="Esci al menu">✕</button>
+        </div>
+
+        <div id="pauseScreen" class="pf-overlay hidden">
+          <p class="pf-eyebrow">Intervallo</p>
+          <h2 class="pf-title pf-title--sm">In pausa</h2>
+          <div class="pf-rule"></div>
+          <p class="pf-subtitle">Il concerto riprende quando vuoi.</p>
+          <div class="pf-btnRow">
+            <button id="resumeBtn" class="pf-bigBtn">Riprendi</button>
+            <button id="pauseModeBtn" class="pf-bigBtn pf-bigBtn--ghost">Cambia prova</button>
+          </div>
+          <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna al menu</button>
+        </div>
+
         <div id="startScreen" class="pf-overlay">
           <p class="pf-eyebrow">Sala 131 · il Pianoforte</p>
           <h1 class="pf-title">Il Direttore</h1>
@@ -1380,6 +1451,13 @@
     elFinalLabel = document.getElementById("finalLabel");
     elDebug = document.getElementById("debugPanel");
 
+    elGameBar = document.getElementById("gameBar");
+    elPauseBtn = document.getElementById("pauseBtn");
+    elExitBtn = document.getElementById("exitBtn");
+    elPauseScreen = document.getElementById("pauseScreen");
+    elResumeBtn = document.getElementById("resumeBtn");
+    elPauseModeBtn = document.getElementById("pauseModeBtn");
+
     elCalibScreen = document.getElementById("calibScreen");
     elCalibVu = document.getElementById("calibVu");
     elCalibNote = document.getElementById("calibNote");
@@ -1442,6 +1520,23 @@
 
     if (elStartBtn) elStartBtn.onclick = onStartTap;
     if (elRestartBtn) elRestartBtn.onclick = restartGame;
+
+    // barra in-game
+    if (elPauseBtn) elPauseBtn.onclick = pauseGame;
+    if (elExitBtn) elExitBtn.onclick = () => {
+      if (window.stopPianoforte) window.stopPianoforte();
+      mostraPagina("menu");
+    };
+    // overlay di pausa
+    if (elResumeBtn) elResumeBtn.onclick = resumeGame;
+    if (elPauseModeBtn) elPauseModeBtn.onclick = () => {
+      paused = false;
+      if (elPauseScreen) elPauseScreen.classList.add("hidden");
+      running = false;
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      if (elGameBar) elGameBar.classList.add("hidden");
+      showModeSelect();
+    };
     if (elChangeModeBtn) elChangeModeBtn.onclick = () => {
       if (elGameOver) elGameOver.classList.add("hidden");
       showModeSelect();
