@@ -1,0 +1,315 @@
+*, *::before, *::after {
+    box-sizing: border-box;
+}
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+
+    background:
+        radial-gradient(circle at 20% 30%, rgba(120,120,255,0.08), transparent 40%),
+        radial-gradient(circle at 80% 70%, rgba(255,100,200,0.05), transparent 45%);
+
+    mix-blend-mode: screen;
+}
+body {
+    margin: 0;
+    font-family: system-ui, Arial;
+    background: #05050a;
+    color: white;
+    overflow: hidden;
+
+    /* 🔥 look giovane / digitale */
+    background: radial-gradient(circle at 50% 30%, #0d0d1a, #000 70%);
+}
+
+
+.hidden {
+    display: none !important;
+}
+
+/* immagine */
+.container {
+    position: relative;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+}
+
+.background {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center top;
+    display: block;
+}
+
+/* =============================
+   BOTTONI — stile base condiviso
+   ============================= */
+
+.btn,
+#btnAvvia,
+#btnTorna {
+    position: absolute;
+    z-index: 2;
+
+    padding: 10px 22px;
+
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+
+    backdrop-filter: blur(14px);
+
+    color: white;
+
+    border-radius: 999px;
+
+    font-size: 13px;
+    letter-spacing: 0.18em;
+
+    cursor: pointer;
+
+    transition: background 0.25s ease, box-shadow 0.25s ease;
+
+    box-shadow: 0 0 25px rgba(255,255,255,0.05);
+
+    transform: none; /* 🔥 BLOCCO MOVIMENTO */
+}
+
+.btn:hover,
+#btnAvvia:hover,
+#btnTorna:hover {
+    background: rgba(255,255,255,0.14);
+    box-shadow: 0 0 30px rgba(255,255,255,0.08);
+
+    transform: none; /* 🔥 SICUREZZA */
+}
+
+
+
+
+
+/* bottone Entra — home */
+.btn-entra {
+    top: 72%;
+    left: 50%;
+   
+}
+
+
+/* bottoni menu */
+
+.b1 { top: 54%; left: 28%;; }
+
+.b2 { top: 85%; left: 60%; }
+
+
+
+/* tasto 131 — posizione riga arancione */
+.btn-131 {
+    top: 57%;
+    left: 28%;
+
+}
+
+
+
+/* tasto CORRIDOIO — posizione riga verde */
+.btn-corridoio {
+    top: 84%;
+    left: 56%;
+   
+}
+
+
+
+#cameraContainer {
+    width: 300px;
+    height: 200px;
+    margin: auto;
+    overflow: hidden;
+    border-radius: 10px;
+    background: black;
+}
+
+/* ================================================
+   CORRIDOIO
+   ================================================ */
+
+#corridoio {
+    background: transparent;
+    min-height: 100vh;
+    min-height: 100dvh;
+
+    padding: 20px 16px 40px;
+    max-width: 420px;
+    margin: 0 auto;
+
+    overflow-y: auto;
+
+    /* 🔥 sensazione aria / deep space */
+    backdrop-filter: blur(2px);
+}
+
+#corridoio .header {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+#corridoio .sottotitolo {
+    font-size: 20px;
+    letter-spacing: 0.12em;
+    color: #888;
+    text-transform: uppercase;
+    margin: 0 0 6px;
+}
+
+#corridoio h1 {
+    font-size: 26px;
+    font-weight: 500;
+    color: white;
+    margin: 0 0 10px;
+}
+
+#corridoio .divisore {
+    width: 32px;
+    height: 1px;
+    background: #555;
+    margin: 0 auto 10px;
+}
+
+#corridoio .descrizione {
+    font-size: 13px;
+    color: #aaa;
+    line-height: 1.6;
+    margin: 0 0 20px;
+    padding: 0 8px;
+}
+
+/* Bottone Avvia — nel flusso, sopra al video */
+#btnAvvia {
+    position: static;
+    left: auto;
+    transform: none;
+    display: block;
+    margin: 0 auto 20px;
+    padding: 14px 40px;
+    background: rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 999px;
+    font-size: 18px;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    transition: background 0.3s ease, transform 0.3s ease;
+    box-shadow: 0 0 25px rgba(255,255,255,0.12);
+    z-index: auto;
+}
+
+#btnAvvia:hover {
+    background: rgba(255, 255, 255, 0.25);
+    transform: scale(1.05);
+}
+
+/* Video */
+#video {
+    width: 100%;
+    aspect-ratio: 4/3;
+    object-fit: cover;
+
+    border-radius: 22px;
+
+    border: 1px solid rgba(255,255,255,0.08);
+
+    box-shadow:
+        0 20px 60px rgba(0,0,0,0.6),
+        0 0 40px rgba(120,120,255,0.08);
+}
+
+/* Riquadri info */
+#corridoio .riquadro1 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+#corridoio .riquadro {
+    background: #1a1a1a;
+    border-radius: 12px;
+    padding: 14px;
+    border: 1px solid #333;
+}
+
+#corridoio .riquadro2 {
+    font-size: 10px;
+    color: #666;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin: 0 0 4px;
+}
+
+#luminosita {
+    font-size: 42px;
+    font-weight: 200;
+
+    letter-spacing: 0.08em;
+
+    text-shadow:
+        0 0 25px rgba(255,255,255,0.12),
+        0 0 60px rgba(120,120,255,0.08);
+}
+
+#rgbDisplay,
+#parzialiDisplay {
+    font-size: 12px;
+    color: rgba(255,255,255,0.55);
+
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+
+    border-radius: 14px;
+
+    padding: 10px 12px;
+
+    backdrop-filter: blur(10px);
+}
+
+/* Bottone Torna indietro — nel flusso, dopo i riquadri
+   Eredita lo stile da .btn, qui solo posizionamento */
+#btnTorna {
+    position: static;
+    left: auto;
+    transform: none;
+    display: block;
+    margin: 10px auto 40px;
+}
+
+
+
+.btn, #btnAvvia, #btnTorna {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+
+    backdrop-filter: blur(14px);
+
+    border-radius: 999px;
+
+    letter-spacing: 0.2em;
+
+    transition: all 0.25s ease;
+
+    box-shadow: 0 0 30px rgba(255,255,255,0.04);
+}
+.btn:hover, #btnAvvia:hover, #btnTorna:hover {
+    background: rgba(255,255,255,0.12);
+    transform: scale(1.04);
+}
