@@ -391,4 +391,5 @@ function tornaMenu() {
     smoothB = 0;
 
     mostraPagina('menu');
+    
 }
