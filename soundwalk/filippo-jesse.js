@@ -38,21 +38,18 @@
      ===================================================================== */
 
   const DEBUG = true;          // pannello di debug in un angolo
-  const MATCH_OCTAVE = false;  // false = qualsiasi ottava va bene (es. ogni DO)
+  const MATCH_OCTAVE = true;   // true = serve l'ottava ESATTA mostrata sul rigo:
+                               // l'altezza disegnata corrisponde alla nota reale
+                               // da suonare (coerenza visiva pitch <-> pentagramma)
 
-  // --- Soglie audio (tarabili a runtime dalla schermata di calibrazione) ---
-  // Sono `let` perché gli slider di calibrazione le modificano dal vivo.
-  // I valori qui sotto sono i DEFAULT consigliati (anche pre-impostati sugli
-  // slider): trovati provando un pianoforte vero. Se cambi idea li ritocchi
-  // dal telefono senza ripassare da GitHub.
+  // --- Soglie audio (impostate AUTOMATICAMENTE dall'autocalibrazione) ---
+  // Sono `let` perché la calibrazione guidata le ricalcola misurando il rumore
+  // di fondo e la qualità delle note che l'utente suona. I valori qui sotto sono
+  // solo i DEFAULT iniziali, validi finché la calibrazione non li sovrascrive.
   let RMS_THRESHOLD = 0.010;   // soglia di volume: sotto = silenzio/rumore
   let CLARITY_MIN = 0.75;      // qualità minima del picco di autocorrelazione
   const FMIN = 70;             // Hz minima cercata
   const FMAX = 1400;           // Hz massima cercata
-
-  // Valori consigliati mostrati come riferimento sugli slider.
-  const RMS_RECOMMENDED = 0.010;
-  const CLARITY_RECOMMENDED = 0.75;
   // Una nota è "azzeccata" se il MIDI arrotondato coincide col target (~±50 cent).
 
   // --- Geometria musicale ---
@@ -123,10 +120,9 @@
   let elGameBar, elPauseBtn, elExitBtn;
   let elPauseScreen, elResumeBtn, elPauseModeBtn;
 
-  // schermata di calibrazione microfono
-  let elCalibScreen, elCalibVu, elCalibNote, elCalibRms, elCalibClarity;
-  let elRmsSlider, elRmsVal, elClaritySlider, elClarityVal, elCalibContinue;
-  let elOnsetSlider, elOnsetVal;
+  // schermata di calibrazione microfono (autocalibrazione guidata)
+  let elCalibScreen, elCalibVu, elCalibNote, elCalibStep, elCalibProgress;
+  let elCalibContinue, elCalibRetry;
   let calibRafId = null; // loop dedicato alla calibrazione (separato dal gioco)
 
   let initialized = false; // per rendere avviaPianoforteInit idempotente
@@ -158,6 +154,23 @@
   let ONSET_REARM = 0.45;     // riarmo quando rms < recentPeak * (1 - ONSET_REARM)... vedi pollAudio
   const REFRACTORY_MS = 120;  // tempo morto minimo dopo un attacco accettato
   const STABLE_FRAMES = 2;    // frame di conferma del pitch prima di accettare
+
+  // Anti-feedback: il telefono ascolta col proprio microfono mentre gli effetti
+  // sonori (e le note del dettato) escono dall'altoparlante dello stesso device.
+  // Senza echo cancellation, quei suoni verrebbero riletti come "note suonate"
+  // dal giocatore. Durante questa finestra NON facciamo scattare onset.
+  let detectMuteUntil = 0;
+  // Timestamp dell'ultimo onset accettato: serve a forzare il riarmo se il
+  // giocatore suona legato (volume sempre alto) e non si scende mai sotto la
+  // soglia di riarmo: senza questo, l'input smetterebbe di registrare.
+  let onsetAt = 0;
+  const MAX_HOLD_MS = 700;    // dopo questo tempo dall'onset, riarma comunque
+
+  // Segna che l'altoparlante starà suonando fino a `untilMs` (ms, performance.now):
+  // entro quella finestra il rilevamento ignora gli attacchi (sono il nostro audio).
+  function muteDetectionUntil(untilMs) {
+    if (untilMs > detectMuteUntil) detectMuteUntil = untilMs;
+  }
 
   // game loop
   let rafId = null, lastTs = 0, running = false;
@@ -293,6 +306,9 @@
     g.gain.exponentialRampToValueAtTime(0.0008, t0 + dur);     // rilascio
     osc.connect(g); g.connect(audioCtx.destination);
     osc.start(t0); osc.stop(t0 + dur + 0.02);
+    // copre l'eventuale parte futura (when>now) + la durata del suono + coda
+    const aheadMs = Math.max(0, (t0 - audioCtx.currentTime)) * 1000;
+    muteDetectionUntil(performance.now() + aheadMs + dur * 1000 + 60);
   }
 
   // Successo: la nota stessa, breve e pulita.
@@ -316,6 +332,7 @@
     g.gain.exponentialRampToValueAtTime(0.0008, t0 + 0.14);
     osc.connect(g); g.connect(audioCtx.destination);
     osc.start(t0); osc.stop(t0 + 0.16);
+    muteDetectionUntil(performance.now() + 0.16 * 1000 + 60);
   }
 
   // Sequenza completata (dettato/memoria): arpeggio ascendente DO-MI-SOL.
@@ -400,6 +417,12 @@
     const pc = ((midi % 12) + 12) % 12;
     return { name: NOTE_NAMES_IT[pc], octave: Math.floor(midi / 12) - 1, pc };
   }
+  // Etichetta con ottava (es. "DO4"): il nome da solo sarebbe ambiguo ora che
+  // l'ottava conta, quindi il testo deve indicare anche l'altezza reale.
+  function noteLabel(midi) {
+    const n = midiToNote(midi);
+    return n.name + n.octave;
+  }
 
   function pollAudio() {
     if (!analyser) return;
@@ -424,6 +447,10 @@
     // significa che la nota è stata rilasciata / sta decadendo: pronto a una
     // nuova. ONSET_REARM alto => serve un calo maggiore => meno doppi conteggi.
     if (!armed && rms < recentPeak * (1 - ONSET_REARM)) armed = true;
+    // riarmo di sicurezza per il legato: se è passato troppo tempo dall'ultimo
+    // attacco senza un calo di volume, riarma comunque (altrimenti l'input
+    // suonato "attaccato" non verrebbe mai più registrato).
+    if (!armed && now - onsetAt > MAX_HOLD_MS) armed = true;
 
     // pitch detection
     const { freq, clarity } = autoCorrelate(timeBuf, audioCtx.sampleRate);
@@ -443,9 +470,11 @@
     // stabile e fuori dal periodo refrattario. NON serve che l'RMS stia
     // ancora salendo: sul piano l'attacco è troppo rapido per vederlo.
     let isOnset = false;
-    if (armed && stableCount >= STABLE_FRAMES && now >= refractoryUntil) {
+    if (armed && stableCount >= STABLE_FRAMES && now >= refractoryUntil
+        && now >= detectMuteUntil) {  // non scattare sul nostro stesso audio
       isOnset = true;
       armed = false;
+      onsetAt = now;
       refractoryUntil = now + REFRACTORY_MS;
     }
 
@@ -872,8 +901,8 @@
     if (MODE === "direttore") {
       const target = notes[0];
       if (target && shiftAnim === 0) {
-        let txt = target.type === "note" ? midiToNote(target.midi).name
-          : target.midis.slice(target.progress).map(m => midiToNote(m).name).join(" · ");
+        let txt = target.type === "note" ? noteLabel(target.midi)
+          : target.midis.slice(target.progress).map(m => noteLabel(m)).join(" · ");
         drawBigNoteName(txt);
       }
     } else if (MODE === "scorrimento") {
@@ -882,12 +911,12 @@
       for (const n of scrollNotes) {
         if (n.x >= runnerX - 12) { const d = n.x - runnerX; if (d < best) { best = d; near = n; } }
       }
-      if (near) drawBigNoteName(midiToNote(near.midi).name);
+      if (near) drawBigNoteName(noteLabel(near.midi));
     } else { // dettato / memoria
       if (seqPhase === "listen") drawBigNoteName("Ascolta…");
       else {
         const m = seq[seqProgress];
-        if (m != null) drawBigNoteName(midiToNote(m).name);
+        if (m != null) drawBigNoteName(noteLabel(m));
       }
     }
   }
@@ -1186,6 +1215,7 @@
     cfg = DIFFICULTIES[CURRENT_DIFFICULTY];
     score = 0; lives = (MODE === "memoria") ? 1 : MAX_LIVES; section = "A";
     armed = true; refractoryUntil = 0; stableMidi = -1; stableCount = 0; recentPeak = 0;
+    onsetAt = 0; detectMuteUntil = 0;
     shiftAnim = 0; runnerAnim = "idle"; runnerAnimT = 0; flashErr = 0;
     notes = []; scrollNotes = []; seq = []; endParticles = [];
 
@@ -1241,55 +1271,103 @@
   }
 
   /* =====================================================================
-     CALIBRAZIONE MICROFONO (schermata di prova pre-gioco)
-     Loop dedicato, separato dal game loop: legge il microfono, mostra
-     VU/nota/clarity in tempo reale e lascia regolare le due soglie con
-     gli slider. Le soglie modificate valgono per tutta la sessione.
+     AUTOCALIBRAZIONE MICROFONO (procedura guidata pre-gioco)
+     Loop dedicato, separato dal game loop. In due fasi:
+       (1) misura il RUMORE di fondo mentre l'utente sta in silenzio;
+       (2) fa suonare all'utente alcune NOTE di riferimento e, dai dati
+           raccolti, calcola da sé RMS_THRESHOLD e CLARITY_MIN.
+     Nessuno slider: tutto automatico. Le soglie valgono per la sessione.
      ===================================================================== */
+
+  // Note di riferimento che l'utente deve suonare per calibrare (bassa/media/alta:
+  // così verifichiamo che il rilevamento regga su tutto il range della stanza).
+  const CALIB_NOTES = [60, 67, 72];   // DO4, SOL4, DO5
+  const CALIB_AMBIENT_MS = 1800;      // durata misura del rumore di fondo
+
+  function clampRange(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
+
+  // Stato dell'autocalibrazione
+  let calibPhase = "ambient";         // ambient | listen | done
+  let calibPhaseStart = 0;
+  let calibNoiseMax = 0, calibNoiseSum = 0, calibNoiseN = 0;
+  let calibIdx = 0;
+  let calibClarities = [];
 
   function startCalibration() {
     gameState = "calibrating";
     if (elCalibScreen) elCalibScreen.classList.remove("hidden");
+    if (elCalibContinue) elCalibContinue.classList.add("hidden");
+    if (elCalibRetry) elCalibRetry.classList.add("hidden");
 
-    // pre-imposta gli slider sui valori correnti
-    if (elRmsSlider) {
-      elRmsSlider.value = RMS_THRESHOLD;
-      elRmsVal.textContent = RMS_THRESHOLD.toFixed(3);
-      elRmsSlider.oninput = () => {
-        RMS_THRESHOLD = parseFloat(elRmsSlider.value);
-        elRmsVal.textContent = RMS_THRESHOLD.toFixed(3);
-      };
-    }
-    if (elClaritySlider) {
-      elClaritySlider.value = CLARITY_MIN;
-      elClarityVal.textContent = CLARITY_MIN.toFixed(2);
-      elClaritySlider.oninput = () => {
-        CLARITY_MIN = parseFloat(elClaritySlider.value);
-        elClarityVal.textContent = CLARITY_MIN.toFixed(2);
-      };
-    }
-    if (elOnsetSlider) {
-      elOnsetSlider.value = ONSET_REARM;
-      elOnsetVal.textContent = ONSET_REARM.toFixed(2);
-      elOnsetSlider.oninput = () => {
-        ONSET_REARM = parseFloat(elOnsetSlider.value);
-        elOnsetVal.textContent = ONSET_REARM.toFixed(2);
-      };
-    }
-    if (elCalibContinue) {
-      elCalibContinue.onclick = () => {
-        stopCalibration();
-        beginPlaying();   // niente più gate tilt: si gioca direttamente
-      };
-    }
+    // Durante la MISURA usiamo soglie permissive, così il microfono rileva tutto;
+    // i valori definitivi li calcoliamo a fine procedura dai dati raccolti.
+    RMS_THRESHOLD = 0.004;
+    CLARITY_MIN = 0.50;
+
+    calibPhase = "ambient";
+    calibPhaseStart = performance.now();
+    calibNoiseMax = 0; calibNoiseSum = 0; calibNoiseN = 0;
+    calibIdx = 0; calibClarities = [];
+    // reset macchina onset, così il primo attacco viene colto pulito
+    armed = true; stableMidi = -1; stableCount = 0; recentPeak = 0;
+    onsetAt = 0; detectMuteUntil = 0;
+
+    if (elCalibContinue) elCalibContinue.onclick = () => { stopCalibration(); beginPlaying(); };
+    if (elCalibRetry) elCalibRetry.onclick = () => startCalibration();
 
     const tick = () => {
       if (gameState !== "calibrating") return;
       pollAudio();
+      stepCalibration();
       renderCalibration();
       calibRafId = requestAnimationFrame(tick);
     };
     calibRafId = requestAnimationFrame(tick);
+  }
+
+  // Avanza la procedura: misura il rumore, poi attende le note richieste, infine
+  // calcola le soglie definitive. Tutto automatico, senza slider.
+  function stepCalibration() {
+    const now = performance.now();
+
+    if (calibPhase === "ambient") {
+      // accumula il livello di rumore mentre l'utente sta in silenzio
+      calibNoiseSum += lastRms; calibNoiseN++;
+      if (lastRms > calibNoiseMax) calibNoiseMax = lastRms;
+      if (now - calibPhaseStart >= CALIB_AMBIENT_MS) {
+        const noiseAvg = calibNoiseN ? calibNoiseSum / calibNoiseN : 0;
+        // soglia volume = ben sopra il rumore misurato, con un minimo di sicurezza
+        RMS_THRESHOLD = clampRange(Math.max(calibNoiseMax * 1.8, noiseAvg * 3, 0.006), 0.006, 0.04);
+        calibPhase = "listen";
+        calibPhaseStart = now;
+        armed = true; stableMidi = -1; stableCount = 0;
+      }
+      return;
+    }
+
+    if (calibPhase === "listen") {
+      const target = CALIB_NOTES[calibIdx];
+      // accetta quando arriva un ATTACCO la cui classe di nota coincide col target
+      // (in calibrazione siamo tolleranti sull'ottava: conta che sia la nota giusta)
+      if (lastDetected && lastDetected.isOnset && lastRms > RMS_THRESHOLD) {
+        const samePc = (((lastDetected.midi % 12) + 12) % 12) === (((target % 12) + 12) % 12);
+        if (samePc) {
+          calibClarities.push(lastDetected.clarity);
+          calibIdx++;
+          if (calibIdx >= CALIB_NOTES.length) {
+            // qualità minima = la peggiore osservata, con un margine sotto
+            let minC = 1;
+            for (const c of calibClarities) if (c < minC) minC = c;
+            CLARITY_MIN = clampRange(minC - 0.06, 0.55, 0.85);
+            calibPhase = "done";
+            if (elCalibContinue) elCalibContinue.classList.remove("hidden");
+            if (elCalibRetry) elCalibRetry.classList.remove("hidden");
+          }
+        }
+      }
+      return;
+    }
+    // done: si aspetta che l'utente prema "Comincia"
   }
 
   function stopCalibration() {
@@ -1297,7 +1375,7 @@
     if (elCalibScreen) elCalibScreen.classList.add("hidden");
   }
 
-  // Aggiorna la barra VU e i readout durante la calibrazione.
+  // Aggiorna la barra VU, la nota rilevata e i testi-guida della procedura.
   let calibOnsetFlash = 0;
   function renderCalibration() {
     if (!elCalibVu) return;
@@ -1306,21 +1384,32 @@
     const passing = lastRms >= RMS_THRESHOLD;
     elCalibVu.style.background = passing ? PAL.note : PAL.err;
 
-    // quando scatta un ATTACCO, lampeggia (feedback "colpo registrato")
+    // lampeggio sull'attacco rilevato (feedback "colpo registrato")
     if (lastDetected && lastDetected.isOnset) calibOnsetFlash = 1;
     calibOnsetFlash = Math.max(0, calibOnsetFlash - 0.05);
 
     if (lastDetected) {
       elCalibNote.textContent = lastDetected.name + lastDetected.octave;
-      elCalibClarity.textContent = lastDetected.clarity.toFixed(2);
-      // la nota lampeggia in oro quando è un attacco appena rilevato
       elCalibNote.style.color = calibOnsetFlash > 0.3 ? PAL.gold : PAL.note;
     } else {
       elCalibNote.textContent = "—";
       elCalibNote.style.color = PAL.inkDim;
-      elCalibClarity.textContent = "0.00";
     }
-    elCalibRms.textContent = lastRms.toFixed(3);
+
+    if (!elCalibStep) return;
+    if (calibPhase === "ambient") {
+      const left = Math.ceil(Math.max(0, CALIB_AMBIENT_MS - (performance.now() - calibPhaseStart)) / 1000);
+      elCalibStep.textContent = "Fai silenzio… misuro il rumore di fondo (" + left + ")";
+      if (elCalibProgress) elCalibProgress.textContent = "";
+    } else if (calibPhase === "listen") {
+      const target = CALIB_NOTES[calibIdx];
+      elCalibStep.textContent = "Suona  " + noteLabel(target);
+      if (elCalibProgress) elCalibProgress.textContent = "nota " + (calibIdx + 1) + " di " + CALIB_NOTES.length;
+    } else {
+      elCalibStep.textContent = "Calibrazione completata ✓";
+      if (elCalibProgress) elCalibProgress.textContent =
+        "vol≥" + RMS_THRESHOLD.toFixed(3) + " · qual≥" + CLARITY_MIN.toFixed(2);
+    }
   }
 
 
@@ -1388,34 +1477,20 @@
 
         <div id="calibScreen" class="pf-overlay hidden">
           <p class="pf-eyebrow">Accordatura</p>
-          <h2 class="pf-title pf-title--sm">Prova il microfono</h2>
+          <h2 class="pf-title pf-title--sm">Calibrazione automatica</h2>
           <div class="pf-rule"></div>
-          <p class="pf-subtitle">Suona qualche nota. La barra deve accendersi<br>e la nota deve illuminarsi a ogni tocco.</p>
+          <p id="calibStep" class="pf-subtitle">Preparati: l'app si regola da sola.</p>
 
           <div class="pf-vuWrap"><div id="calibVu" class="pf-vuBar"></div></div>
           <div class="pf-readout">
             <span id="calibNote" class="pf-readout-note">—</span>
-            <span class="pf-readout-meta">vol <span id="calibRms">0.000</span> · qualità <span id="calibClarity">0.00</span></span>
+            <span id="calibProgress" class="pf-readout-meta"></span>
           </div>
 
-          <div class="pf-sliderRow">
-            <label>Volume minimo</label>
-            <input id="rmsSlider" class="pf-slider" type="range" min="0.001" max="0.05" step="0.001">
-            <span id="rmsVal" class="pf-sliderVal">0.010</span>
-          </div>
-          <div class="pf-sliderRow">
-            <label>Qualità minima</label>
-            <input id="claritySlider" class="pf-slider" type="range" min="0.50" max="0.95" step="0.01">
-            <span id="clarityVal" class="pf-sliderVal">0.75</span>
-          </div>
-          <div class="pf-sliderRow">
-            <label>Stacco tra note</label>
-            <input id="onsetSlider" class="pf-slider" type="range" min="0.15" max="0.80" step="0.01">
-            <span id="onsetVal" class="pf-sliderVal">0.45</span>
-          </div>
-          <p class="pf-hint">Se non rileva, abbassa volume e qualità. Se conta due volte la stessa nota, alza lo stacco tra note.</p>
+          <p class="pf-hint">Segui le indicazioni: prima il silenzio per misurare il rumore, poi suona le note richieste.</p>
 
-          <button id="calibContinue" class="pf-bigBtn">Comincia</button>
+          <button id="calibContinue" class="pf-bigBtn hidden">Comincia</button>
+          <button id="calibRetry" class="pf-bigBtn pf-bigBtn--ghost hidden">Ripeti calibrazione</button>
           <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna indietro</button>
         </div>
 
@@ -1461,15 +1536,10 @@
     elCalibScreen = document.getElementById("calibScreen");
     elCalibVu = document.getElementById("calibVu");
     elCalibNote = document.getElementById("calibNote");
-    elCalibRms = document.getElementById("calibRms");
-    elCalibClarity = document.getElementById("calibClarity");
-    elRmsSlider = document.getElementById("rmsSlider");
-    elRmsVal = document.getElementById("rmsVal");
-    elClaritySlider = document.getElementById("claritySlider");
-    elClarityVal = document.getElementById("clarityVal");
-    elOnsetSlider = document.getElementById("onsetSlider");
-    elOnsetVal = document.getElementById("onsetVal");
+    elCalibStep = document.getElementById("calibStep");
+    elCalibProgress = document.getElementById("calibProgress");
     elCalibContinue = document.getElementById("calibContinue");
+    elCalibRetry = document.getElementById("calibRetry");
 
     if (DEBUG && elDebug) elDebug.classList.remove("hidden");
     return true;

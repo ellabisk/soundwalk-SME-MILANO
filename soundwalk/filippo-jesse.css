@@ -310,53 +310,6 @@
 }
 #pianoforte .pf-readout-meta span { color: var(--pf-ink); }
 
-#pianoforte .pf-sliderRow {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 88%;
-  max-width: 360px;
-  margin: 7px 0;
-  font-size: 14px;
-}
-#pianoforte .pf-sliderRow label {
-  flex: 0 0 108px;
-  text-align: right;
-  font-style: italic;
-  color: var(--pf-inkdim);
-}
-#pianoforte .pf-slider {
-  flex: 1 1 auto;
-  -webkit-appearance: none;
-  appearance: none;
-  height: 1px;
-  background: var(--pf-staff);
-  outline: none;
-}
-#pianoforte .pf-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 16px; height: 16px;
-  border-radius: 50%;
-  background: var(--pf-bg);
-  border: 1.5px solid var(--pf-gold);
-  cursor: pointer;
-  box-shadow: 0 0 10px rgba(212,168,67,0.3);
-}
-#pianoforte .pf-slider::-moz-range-thumb {
-  width: 16px; height: 16px;
-  border-radius: 50%;
-  background: var(--pf-bg);
-  border: 1.5px solid var(--pf-gold);
-  cursor: pointer;
-}
-#pianoforte .pf-sliderVal {
-  flex: 0 0 52px;
-  text-align: left;
-  color: var(--pf-gold);
-  font-variant-numeric: tabular-nums;
-}
-
 /* ---------- Debug ---------- */
 #pianoforte #debugPanel {
   position: absolute;
@@ -388,7 +341,6 @@
   #pianoforte .pf-rule { margin: 10px 0 12px; }
   #pianoforte .pf-subtitle { margin-bottom: 14px; font-size: 15px; }
   #pianoforte .pf-hint { margin-top: 12px; }
-  #pianoforte .pf-sliderRow { margin: 4px 0; }
   #pianoforte .pf-readout-note { font-size: 28px; }
   #pianoforte .pf-vuWrap { margin: 4px 0 10px; }
   #pianoforte .pf-bigBtn { padding: 11px 32px; font-size: 19px; margin-top: 6px; }
