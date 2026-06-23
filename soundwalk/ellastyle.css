@@ -97,9 +97,10 @@ body {
 
 /* bottone Entra — home */
 .btn-entra {
-    top: 72%;
+    position: absolute;
+    top: 65%;
     left: 50%;
-   
+    transform: translate(-50%);
 }
 
 
@@ -114,7 +115,7 @@ body {
 /* tasto 131 — posizione riga arancione */
 .btn-131 {
     top: 57%;
-    left: 28%;
+    left: 20%;
 
 }
 
@@ -123,7 +124,7 @@ body {
 /* tasto CORRIDOIO — posizione riga verde */
 .btn-corridoio {
     top: 84%;
-    left: 56%;
+    left: 40%;
    
 }
 
