@@ -263,9 +263,9 @@ input[type="range"] { width: 100%; accent-color: #7fd4e8; cursor: pointer; }
     <span class="paramVal" id="refractMsVal">200</span>
   </div>
   <div class="paramRow">
-    <span class="paramLabel">Onset sensitivity</span>
-    <input type="range" id="onsetSens" min="0.003" max="0.05" step="0.001" value="0.015">
-    <span class="paramVal" id="onsetSensVal">0.015</span>
+    <span class="paramLabel">Frame stabili</span>
+    <input type="range" id="stableFrames" min="1" max="10" step="1" value="3">
+    <span class="paramVal" id="stableFramesVal">3</span>
   </div>
 </div>
 
@@ -297,10 +297,18 @@ let freqBuf    = null;
 let sampleRate = 44100;
 const FFT_SIZE = 4096;
 
-let prevRmsShort   = 0;
 let lastOnsetMs    = -9999;
 let onsetFlashEnd  = 0;
 let currentMidi    = -1;
+let wasQuiet       = true;   // stato del frame precedente (sotto soglia)
+
+// Stabilità pitch: aspetta N frame consecutivi sulla stessa nota
+let stableMidi     = -1;
+let stableCount    = 0;
+let onsetPending   = false;
+let onsetPendingMs = 0;
+const ONSET_WINDOW_MS = 400;
+let STABLE_FRAMES  = 3;
 
 const noteHistory  = [];
 const MAX_HISTORY  = 10;
@@ -487,8 +495,6 @@ function poll() {
 
   const rmsAll   = rmsOf(timeBuf);
   const rmsShort = rmsLast(timeBuf, 512); // ultimi ~11ms
-  const dRms     = rmsShort - prevRmsShort;
-  prevRmsShort   = rmsShort;
   const now      = performance.now();
 
   // VU meter
@@ -523,29 +529,60 @@ function poll() {
   const midiExact = freqToMidi(result.freq);
   const info = midiInfo(midiExact);
 
-  // Onset: picco di energia (dRms) sopra soglia + periodo refrattario
-  const isOnset = dRms > ONSET_SENS
-    && rmsAll >= RMS_THRESH
-    && (now - lastOnsetMs) > REFRACTORY;
+  // Onset: segnale che sale sopra soglia (rising edge)
+  const isLoud      = rmsShort >= RMS_THRESH;
+  const risingEdge  = isLoud && wasQuiet && (now - lastOnsetMs) > REFRACTORY;
+  wasQuiet          = !isLoud;
 
-  if (isOnset) {
-    lastOnsetMs  = now;
-    onsetFlashEnd = now + 350;
-    currentMidi  = info.midi;
-    // storico
-    noteHistory.unshift({ label: info.name + info.oct, freq: result.freq.toFixed(1), clarity: result.clarity.toFixed(2), t: new Date().toLocaleTimeString('it-IT', { hour12: false }) });
-    if (noteHistory.length > MAX_HISTORY) noteHistory.pop();
-    renderLog();
+  if (risingEdge) {
+    onsetPending   = true;
+    onsetPendingMs = now;
+    stableMidi     = -1;
+    stableCount    = 0;
   }
 
-  showNote({ info, freq: result.freq, clarity: result.clarity }, rmsAll, isOnset);
+  // Step 2: conferma pitch — conta frame stabili dopo onset energetico
+  const midiRounded = Math.round(freqToMidi(result.freq));
+  if (onsetPending) {
+    if (now - onsetPendingMs > ONSET_WINDOW_MS) {
+      // finestra scaduta senza conferma → annulla
+      onsetPending = false;
+      stableMidi = -1; stableCount = 0;
+    } else {
+      if (midiRounded === stableMidi) {
+        stableCount++;
+      } else {
+        stableMidi = midiRounded;
+        stableCount = 1;
+      }
+
+      if (stableCount >= STABLE_FRAMES) {
+        // nota confermata
+        onsetPending  = false;
+        lastOnsetMs   = now;
+        onsetFlashEnd = now + 350;
+        currentMidi   = midiRounded;
+        noteHistory.unshift({
+          label:   info.name + info.oct,
+          freq:    result.freq.toFixed(1),
+          clarity: result.clarity.toFixed(2),
+          t:       new Date().toLocaleTimeString('it-IT', { hour12: false })
+        });
+        if (noteHistory.length > MAX_HISTORY) noteHistory.pop();
+        renderLog();
+      }
+    }
+  }
+
+  showNote({ info, freq: result.freq, clarity: result.clarity }, rmsAll, false);
 
   document.getElementById('debugInfo').textContent =
     'RMS ' + rmsAll.toFixed(4) +
-    ' · dRMS ' + dRms.toFixed(4) +
-    ' · clarity ' + result.clarity.toFixed(3) +
-    ' · algo ' + ALGO.toUpperCase() +
-    ' · sr ' + sampleRate;
+    ' · short ' + rmsShort.toFixed(4) +
+    ' · ' + (isLoud ? 'LOUD' : 'quiet') +
+    ' · pending ' + onsetPending +
+    ' · stable ' + stableCount + '/' + STABLE_FRAMES +
+    ' · clarity ' + result.clarity.toFixed(3);
 }
 
 function showNote(r, rms, isOnset) {
@@ -709,7 +746,7 @@ slider('yinThresh', 'yinThreshVal', v => YIN_THRESH = v,  v => v.toFixed(2));
 slider('hpsDec',    'hpsDecVal',    v => HPS_DEC    = v,  v => String(Math.round(v)));
 slider('rmsThresh', 'rmsThreshVal', v => RMS_THRESH = v,  v => v.toFixed(3));
 slider('refractMs', 'refractMsVal', v => REFRACTORY = v,  v => String(Math.round(v)));
-slider('onsetSens', 'onsetSensVal', v => ONSET_SENS = v,  v => v.toFixed(3));
+slider('stableFrames', 'stableFramesVal', v => STABLE_FRAMES = Math.round(v), v => String(Math.round(v)));
 
 // Resize canvas se la finestra cambia
 window.onresize = () => {
