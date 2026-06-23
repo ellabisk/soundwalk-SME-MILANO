@@ -233,6 +233,35 @@
   border-bottom-color: var(--pf-gold);
 }
 
+/* ── Griglia statistiche (schermata riepilogo) ── */
+#pianoforte .pf-statsGrid {
+  display: flex;
+  gap: 28px;
+  justify-content: center;
+  margin: 0 0 28px;
+}
+#pianoforte .pf-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+#pianoforte .pf-statVal {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-size: clamp(36px, 11vw, 52px);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--pf-ink);
+}
+#pianoforte .pf-statVal--gold { color: var(--pf-gold); }
+#pianoforte .pf-statVal--err  { color: #c1666b; }
+#pianoforte .pf-statLbl {
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--pf-inkdim);
+}
+
 /* ── Landscape / schermi bassi (iPhone orizzontale) ── */
 @media (max-height: 500px) {
   #pianoforte .pf-overlay {

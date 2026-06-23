@@ -1,7 +1,8 @@
 /* =====================================================================
    SOUNDWALK — SALA 131 · IL PIANOFORTE
-   Algoritmo: YIN pitch detection + threshold-crossing onset.
+   YIN pitch detection + threshold-crossing onset.
    Modalità: Direttore (nota ferma sul pentagramma, la suoni per avanzare).
+   Progressione: prime 10 note singole → accordi arpeggiati crescenti.
    ===================================================================== */
 
 (function () {
@@ -11,16 +12,17 @@
      (0) COSTANTI — modifica qui dopo il test sul piano vero
      ==================================================================== */
 
-  const YIN_THRESH    = 0.12;   // soglia CMNDF (0.10 = più strict, 0.15 = più permissivo)
-  const FMIN          = 70;     // Hz minimo cercato
-  const FMAX          = 1400;   // Hz massimo cercato
-  const STABLE_FRAMES = 3;      // frame consecutivi sulla stessa nota prima di registrarla
-  const REFRACTORY_MS = 300;    // ms minimi tra un onset e il successivo
-  const ONSET_WINDOW  = 400;    // ms: finestra entro cui aspettarsi stabilità dopo onset
-  const CALIB_MS      = 2000;   // durata calibrazione silenzio (ms)
-  const CALIB_MULT    = 2.5;    // soglia = rumore_max × CALIB_MULT
-  const CALIB_MIN     = 0.005;  // soglia minima assoluta
-  const CALIB_MAX     = 0.05;   // soglia massima assoluta
+  const YIN_THRESH        = 0.12;  // soglia CMNDF (0.10 strict, 0.15 permissivo)
+  const FMIN              = 70;    // Hz minimo cercato
+  const FMAX              = 1400;  // Hz massimo cercato
+  const STABLE_FRAMES     = 3;     // frame consecutivi sulla stessa nota prima di confermare
+  const REFRACTORY_MS     = 300;   // ms minimi tra un onset e il successivo
+  const ONSET_WINDOW      = 400;   // ms: finestra di stabilità dopo onset
+  const ERROR_COOLDOWN_MS = 1500;  // ms di blocco onset dopo un errore (evita doppio trigger)
+  const CALIB_MS          = 2000;  // durata calibrazione silenzio
+  const CALIB_MULT        = 2.5;
+  const CALIB_MIN         = 0.005;
+  const CALIB_MAX         = 0.05;
 
   /* ====================================================================
      PALETTE E NOTE
@@ -28,22 +30,20 @@
 
   const PAL = {
     bg:     '#0d1b2a',
-    bg2:    '#13243a',
     staff:  '#5a7a99',
     note:   '#7fd4e8',
     ink:    '#e8dcc0',
     inkDim: '#9a8f76',
     gold:   '#d4a843',
     err:    '#c1666b',
-    accent: '#b794d4',
+    ok:     '#7fd4a8',
   };
 
   const NOTE_NAMES_IT = ['DO','DO#','RE','RE#','MI','FA','FA#','SOL','SOL#','LA','LA#','SI'];
-  const WHITE_MIDIS   = [60,62,64,65,67,69,71,72,74,76,77,79,81,83]; // DO4..SI5
+  // Tasti bianchi DO4–SI5
+  const WHITE_MIDIS   = [60,62,64,65,67,69,71,72,74,76,77,79,81,83];
 
-  const TREBLE_BOTTOM_MIDI = 64; // E4 = linea inferiore del rigo
-
-  // pitch class → step diatonico (0=C..6=B) e accidentale
+  const TREBLE_BOTTOM_MIDI = 64; // E4 = prima linea del rigo (dal basso)
   const PC_STEP = [0,0,1,1,2,3,3,4,4,5,5,6];
   const PC_ACC  = [0,1,0,1,0,0,1,0,1,0,1,0];
 
@@ -64,14 +64,14 @@
   let sampleRate = 44100;
   let RMS_THRESH = 0.010; // sovrascritta dalla calibrazione
 
-  // onset state
-  let wasQuiet      = true;
-  let lastOnsetMs   = -9999;
-  let stableMidi    = -1;
-  let stableCount   = 0;
-  let onsetPending  = false;
-  let onsetPendMs   = 0;
-  let pendingNote   = null; // nota confermata, consumata dal game loop
+  let wasQuiet         = true;
+  let lastOnsetMs      = -9999;
+  let postErrorUntilMs = -9999; // cooldown lungo dopo errore
+  let stableMidi       = -1;
+  let stableCount      = 0;
+  let onsetPending     = false;
+  let onsetPendMs      = 0;
+  let pendingNote      = null; // consumato dal game loop
 
   function rmsLast(buf, n) {
     const start = Math.max(0, buf.length - n);
@@ -82,14 +82,13 @@
 
   function freqToMidi(f) { return 12 * Math.log2(f / 440) + 69; }
 
-  // YIN — de Cheveigné & Kawahara (2002)
+  // YIN — de Cheveigné & Kawahara (2002): meno errori di ottava di NSDF
   function yin(buf, sr) {
     const N  = buf.length;
     const W  = Math.floor(N / 2);
     const t1 = Math.ceil(sr / FMAX);
     const t2 = Math.min(W - 1, Math.floor(sr / FMIN));
 
-    // Funzione di differenza
     const d = new Float32Array(t2 + 1);
     for (let tau = 1; tau <= t2; tau++) {
       let sum = 0;
@@ -100,7 +99,6 @@
       d[tau] = sum;
     }
 
-    // CMNDF (Cumulative Mean Normalized Difference Function)
     const cmnd = new Float32Array(t2 + 1);
     cmnd[0] = 1;
     let run = 0;
@@ -109,7 +107,6 @@
       cmnd[tau] = run > 0 ? (d[tau] * tau) / run : 1;
     }
 
-    // Primo dip sotto la soglia
     for (let tau = t1; tau <= t2; tau++) {
       if (cmnd[tau] < YIN_THRESH) {
         while (tau + 1 <= t2 && cmnd[tau + 1] < cmnd[tau]) tau++;
@@ -119,25 +116,23 @@
           const den = a - 2*b + c;
           if (Math.abs(den) > 1e-12) ft = tau + 0.5 * (a - c) / den;
         }
-        return { freq: sr / ft, clarity: 1 - cmnd[tau] };
+        return { freq: sr / ft };
       }
     }
 
-    // Nessun dip: ritorna il minimo nel range (bassa confidence)
     let bt = t1, bv = cmnd[t1];
     for (let t = t1 + 1; t <= t2; t++) { if (cmnd[t] < bv) { bv = cmnd[t]; bt = t; } }
-    return { freq: sr / bt, clarity: 1 - bv };
+    return { freq: sr / bt };
   }
 
   function pollAudio() {
     if (!analyser) return;
     analyser.getFloatTimeDomainData(timeBuf);
 
-    const rms    = rmsLast(timeBuf, 512); // ultimi ~11ms
+    const rms    = rmsLast(timeBuf, 512);
     const isLoud = rms >= RMS_THRESH;
     const now    = performance.now();
 
-    // Durante calibrazione: solo raccolta rumore, niente onset
     if (gameState === 'calibrating') {
       calibSamples.push(rms);
       wasQuiet = true;
@@ -151,7 +146,10 @@
     }
 
     // Rising edge → apre finestra di conferma pitch
-    if (wasQuiet && (now - lastOnsetMs) > REFRACTORY_MS) {
+    // Bloccato durante cooldown refrattario normale E durante cooldown post-errore
+    if (wasQuiet &&
+        (now - lastOnsetMs) > REFRACTORY_MS &&
+        now > postErrorUntilMs) {
       onsetPending = true;
       onsetPendMs  = now;
       stableMidi   = -1;
@@ -159,7 +157,6 @@
     }
     wasQuiet = false;
 
-    // Pitch detection
     const { freq } = yin(timeBuf, sampleRate);
     if (freq <= 0) return;
 
@@ -167,7 +164,6 @@
 
     if (onsetPending) {
       if (now - onsetPendMs > ONSET_WINDOW) {
-        // Finestra scaduta
         onsetPending = false; stableMidi = -1; stableCount = 0;
       } else {
         if (midi === stableMidi) stableCount++;
@@ -196,7 +192,7 @@
       analyser.fftSize = 4096;
       timeBuf    = new Float32Array(analyser.fftSize);
       const src  = audioCtx.createMediaStreamSource(micStream);
-      src.connect(analyser); // NON a destination → niente feedback
+      src.connect(analyser);
       return true;
     } catch (e) {
       alert('Permesso microfono negato: ' + e.message);
@@ -258,9 +254,9 @@
 
   let canvas, ctx;
   let W = 0, H = 0, DPR = 1;
-  let staffY  = 0; // linea inferiore del rigo (px)
-  let lineGap = 0; // distanza tra le linee (px)
-  let noteX   = 0; // posizione x della nota corrente
+  let staffY  = 0;
+  let lineGap = 0;
+  let noteX   = 0;
 
   function resizeCanvas() {
     if (!canvas) return;
@@ -287,51 +283,126 @@
      (4) STATO DI GIOCO
      ==================================================================== */
 
-  let gameState   = 'idle'; // idle | calibrating | playing | gameover
-  let score       = 0;
-  let lives       = 3;
-  let currentNote = null;   // { midi }
-  let nextNote    = null;   // anteprima nota successiva
+  let gameState    = 'idle';
+  let score        = 0;
+  let errorCount   = 0;
+  let noteIndex    = 0;  // numero di sfide completate
+  let noteStartTime = 0; // timestamp quando la nota/sfida è diventata attiva
 
-  // Animazione scorrimento nota
-  // type: 'in' (arriva da destra) | 'idle' | 'out' (esce a sinistra)
+  // Sfida corrente: { notes: [midi,...], step: int }
+  let challenge     = null;
+  let nextChallenge = null;
+
   let anim     = null;
   let flashErr = 0;
   let frameN   = 0;
 
-  const ANIM_DUR = 0.22; // secondi
+  // Pop-up di feedback: [{ text, x, y, t, color }]
+  let popups = [];
 
-  function randomNote() {
-    return { midi: WHITE_MIDIS[Math.floor(Math.random() * WHITE_MIDIS.length)] };
+  const ANIM_DUR = 0.22;
+
+  /* ── Generazione sfide ── */
+
+  // Intervalli in semitoni per livello (dal più semplice)
+  const INTERVAL_POOL = [
+    [3, 4, 5],              // lv 0: terza min, terza magg, quarta
+    [3, 4, 5, 7],           // lv 1: + quinta
+    [3, 4, 5, 7, 8, 9],     // lv 2: + sesta
+    [3, 4, 5, 7, 8, 9, 12], // lv 3: + ottava
+    [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], // lv 4+: qualsiasi
+  ];
+
+  function generateChallenge(idx) {
+    if (idx < 10) {
+      return { notes: [randomWhiteNote()], step: 0 };
+    }
+
+    const level    = Math.min(4, Math.floor((idx - 10) / 10));
+    const chordProb = Math.min(0.75, 0.22 + level * 0.14);
+
+    if (Math.random() > chordProb) {
+      return { notes: [randomWhiteNote()], step: 0 };
+    }
+
+    // Dimensione accordo cresce con il livello
+    const maxSize = Math.min(4, 2 + Math.floor(level / 2));
+    const size = 2 + Math.floor(Math.random() * (maxSize - 1));
+    return { notes: buildChord(size, level), step: 0 };
+  }
+
+  function randomWhiteNote() {
+    return WHITE_MIDIS[Math.floor(Math.random() * WHITE_MIDIS.length)];
+  }
+
+  function buildChord(size, level) {
+    // Radice nel registro comodo (DO4–SOL5)
+    const roots = WHITE_MIDIS.filter(m => m >= 60 && m <= 79);
+    const root  = roots[Math.floor(Math.random() * roots.length)];
+    const pool  = INTERVAL_POOL[Math.min(level, INTERVAL_POOL.length - 1)];
+
+    const notes = [root];
+    for (let i = 1; i < size; i++) {
+      const interval = pool[Math.floor(Math.random() * pool.length)];
+      const next     = notes[notes.length - 1] + interval;
+      if (next <= 84) notes.push(next); // non oltre DO6
+    }
+    return notes.sort((a, b) => a - b); // ascendente per arpeggio
   }
 
   function beginPlaying() {
-    gameState   = 'playing';
-    score       = 0;
-    lives       = 3;
-    flashErr    = 0;
-    pendingNote = null;
-    wasQuiet    = true;
-    onsetPending = false;
-    stableMidi  = -1; stableCount = 0;
-    currentNote = randomNote();
-    nextNote    = randomNote();
-    anim        = { type: 'in', t: 0 };
+    gameState        = 'playing';
+    score            = 0;
+    errorCount       = 0;
+    noteIndex        = 0;
+    flashErr         = 0;
+    popups           = [];
+    pendingNote      = null;
+    wasQuiet         = true;
+    onsetPending     = false;
+    stableMidi       = -1; stableCount = 0;
+    postErrorUntilMs = -9999;
+    challenge        = generateChallenge(0);
+    nextChallenge    = generateChallenge(1);
+    noteStartTime    = performance.now();
+    anim             = { type: 'in', t: 0 };
     if (elGameBar) elGameBar.classList.remove('hidden');
   }
 
   function onNoteDetected(midi) {
     if (gameState !== 'playing') return;
-    if (anim && anim.type !== 'idle') return; // aspetta fine animazione
+    if (anim && anim.type !== 'idle') return;
 
-    if (midi === currentNote.midi) {
-      score++;
-      anim = { type: 'out', t: 0 };
+    const targetMidi = challenge.notes[challenge.step];
+
+    if (midi === targetMidi) {
+      // Nota corretta → calcola punteggio con bonus tempo
+      const elapsed   = (performance.now() - noteStartTime) / 1000;
+      const timeBonus = Math.max(0, Math.round(50 * Math.max(0, 1 - elapsed / 8)));
+      const pts       = 50 + timeBonus;
+      score += pts;
+      spawnPopup('+' + pts, noteX, staffYOf(targetMidi) - lineGap * 2.2, PAL.ok);
+
+      challenge.step++;
+      noteStartTime = performance.now(); // timer repart per prossima nota dell'arpeggio
+
+      if (challenge.step >= challenge.notes.length) {
+        // Sfida completata → avanza
+        noteIndex++;
+        anim = { type: 'out', t: 0 };
+      }
+      // Altrimenti resta sulla stessa sfida, prossima nota dell'arpeggio
     } else {
-      lives--;
-      flashErr = 1;
-      if (lives <= 0) endGame();
+      // Errore — imposta cooldown lungo per evitare doppio trigger su note tenute
+      errorCount++;
+      flashErr         = 1;
+      postErrorUntilMs = performance.now() + ERROR_COOLDOWN_MS;
+      spawnPopup('✗', noteX, staffYOf(targetMidi) - lineGap * 2.2, PAL.err);
     }
+  }
+
+  function spawnPopup(text, x, y, color) {
+    popups.push({ text, x, y, t: 0, color });
   }
 
   function updateGame(dt) {
@@ -339,15 +410,22 @@
 
     if (flashErr > 0) flashErr = Math.max(0, flashErr - dt / 0.3);
 
+    // Pop-up: avanzano nel tempo e scompaiono
+    for (let i = popups.length - 1; i >= 0; i--) {
+      popups[i].t += dt / 1.1;
+      if (popups[i].t >= 1) popups.splice(i, 1);
+    }
+
     if (anim && anim.type !== 'idle') {
       anim.t += dt / ANIM_DUR;
       if (anim.t >= 1) {
         if (anim.type === 'out') {
-          currentNote = nextNote;
-          nextNote    = randomNote();
-          anim        = { type: 'in', t: 0 };
+          challenge     = nextChallenge;
+          nextChallenge = generateChallenge(noteIndex + 1);
+          anim          = { type: 'in', t: 0 };
         } else {
-          anim = { type: 'idle', t: 1 };
+          anim          = { type: 'idle', t: 1 };
+          noteStartTime = performance.now(); // timer parte da quando la nota è ferma
         }
       }
     }
@@ -358,11 +436,18 @@
     }
   }
 
-  function endGame() {
-    gameState = 'gameover';
-    if (elGameBar)   elGameBar.classList.add('hidden');
-    if (elFinalScore) elFinalScore.textContent = String(score);
-    if (elGameOver)  elGameOver.classList.remove('hidden');
+  function showSummary() {
+    gameState  = 'gameover';
+    stopLoop();
+    const total = noteIndex;
+    const acc   = (total + errorCount) > 0
+      ? Math.round(100 * total / (total + errorCount))
+      : 0;
+    if (elGameBar)     elGameBar.classList.add('hidden');
+    if (elFinalScore)  elFinalScore.textContent  = String(score);
+    if (elFinalErrors) elFinalErrors.textContent = String(errorCount);
+    if (elFinalAcc)    elFinalAcc.textContent    = acc + '%';
+    if (elGameOver)    elGameOver.classList.remove('hidden');
   }
 
   /* ====================================================================
@@ -377,14 +462,14 @@
     drawStaff();
 
     if (gameState === 'playing') {
-      drawCurrentNote();
+      drawChallenge();
+      drawPopups();
       drawHud();
       if (flashErr > 0) {
         ctx.fillStyle = `rgba(193,102,107,${(flashErr * 0.28).toFixed(3)})`;
         ctx.fillRect(0, 0, W, H);
       }
     } else if (gameState === 'calibrating') {
-      // Pentagramma visibile ma nota assente — feedback visivo "ascolto"
       drawListeningDot();
     }
   }
@@ -437,19 +522,19 @@
     ctx.restore();
   }
 
-  function drawCurrentNote() {
-    if (!currentNote || !anim) return;
+  /* ── Disegno sfida corrente ── */
+
+  function drawChallenge() {
+    if (!challenge || !anim) return;
 
     const p = Math.min(1, anim.t);
     let x = noteX, alpha = 1;
 
     if (anim.type === 'out') {
-      // ease in: accelera verso sinistra
       const ease = p * p;
       x     = noteX - ease * W * 0.55;
       alpha = 1 - p;
     } else if (anim.type === 'in') {
-      // ease out: decelera arrivando al centro
       const ease = 1 - (1 - p) * (1 - p);
       x     = noteX + (1 - ease) * W * 0.42;
       alpha = ease;
@@ -457,45 +542,102 @@
 
     ctx.save();
     ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-    drawNoteSymbol(x, currentNote.midi, true);
+    drawChallengeAt(x, challenge, true);
     ctx.restore();
 
-    // Anteprima prossima nota (semitrasparente, a destra)
-    if (nextNote && anim.type === 'idle') {
+    // Anteprima prossima sfida (semitrasparente a destra)
+    if (nextChallenge && anim.type === 'idle') {
       ctx.save();
       ctx.globalAlpha = 0.16;
-      drawNoteSymbol(noteX + W * 0.36, nextNote.midi, false);
+      drawChallengeAt(noteX + W * 0.36, nextChallenge, false);
       ctx.restore();
     }
   }
 
-  function drawNoteSymbol(x, midi, isTarget) {
-    const y   = staffYOf(midi);
-    const r   = lineGap * 0.44;
-    const rx  = r * 1.4;
-    const pc  = ((midi % 12) + 12) % 12;
+  function drawChallengeAt(x, ch, isActive) {
+    const notes = ch.notes;
+    const step  = ch.step || 0;
+
+    // Parentesi verticale a sinistra per accordi
+    if (isActive && notes.length > 1) {
+      const topY = staffYOf(notes[notes.length - 1]) - lineGap * 0.3;
+      const botY = staffYOf(notes[0]) + lineGap * 0.3;
+      const bx   = x - lineGap * 1.9;
+      ctx.save();
+      ctx.strokeStyle = PAL.gold;
+      ctx.lineWidth   = Math.max(1, lineGap * 0.07);
+      ctx.lineCap     = 'round';
+      ctx.globalAlpha = 0.55;
+      // Staffa
+      ctx.beginPath();
+      ctx.moveTo(bx + lineGap * 0.22, topY);
+      ctx.lineTo(bx, topY);
+      ctx.lineTo(bx, botY);
+      ctx.lineTo(bx + lineGap * 0.22, botY);
+      ctx.stroke();
+      // Freccina ascendente (arpeggio dal basso)
+      ctx.beginPath();
+      ctx.moveTo(bx - lineGap * 0.16, botY + lineGap * 0.05);
+      ctx.lineTo(bx, botY - lineGap * 0.3);
+      ctx.lineTo(bx + lineGap * 0.16, botY + lineGap * 0.05);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    for (let i = 0; i < notes.length; i++) {
+      const midi = notes[i];
+      let state;
+      if (!isActive)     { state = 'preview'; }
+      else if (i < step) { state = 'done'; }
+      else if (i === step) { state = 'current'; }
+      else               { state = 'pending'; }
+
+      // Offset x per note adiacenti (evita sovrapposizione capotasti vicini)
+      const diatDist = i > 0
+        ? Math.abs(diatonicIndex(notes[i]) - diatonicIndex(notes[i-1]))
+        : 0;
+      const xOff = (diatDist <= 1 && i > 0) ? lineGap * 1.1 : 0;
+
+      drawNoteSymbol(x + xOff, midi, state);
+    }
+  }
+
+  function drawNoteSymbol(x, midi, state) {
+    const y  = staffYOf(midi);
+    const r  = lineGap * 0.44;
+    const rx = r * 1.4;
+    const pc = ((midi % 12) + 12) % 12;
+
+    let color, alpha;
+    switch (state) {
+      case 'current': color = PAL.note;   alpha = 1;    break;
+      case 'done':    color = PAL.inkDim; alpha = 0.38; break;
+      case 'pending': color = PAL.note;   alpha = 0.32; break;
+      default:        color = PAL.inkDim; alpha = 1;    break; // preview
+    }
 
     drawLedgerLines(x, midi);
 
     ctx.save();
-    if (isTarget) {
-      const pulse = lineGap * (0.65 + Math.sin(frameN * 0.14) * 0.28);
+    ctx.globalAlpha *= alpha;
+
+    if (state === 'current') {
       ctx.shadowColor = PAL.note;
-      ctx.shadowBlur  = pulse;
+      ctx.shadowBlur  = lineGap * (0.65 + Math.sin(frameN * 0.14) * 0.28);
     }
-    ctx.fillStyle = isTarget ? PAL.note : PAL.inkDim;
+    ctx.fillStyle = color;
     ctx.beginPath();
     ctx.ellipse(x, y, rx, r, -0.3, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
 
     // Gambo
-    const midY = staffY - lineGap * 2;
-    ctx.strokeStyle = ctx.fillStyle;
+    const midStaffY = staffY - lineGap * 2;
+    ctx.strokeStyle = color;
     ctx.lineWidth   = lineGap * 0.13;
     ctx.lineCap     = 'round';
     ctx.beginPath();
-    if (y > midY) {
+    if (y > midStaffY) {
       ctx.moveTo(x + rx * 0.82, y - r * 0.3);
       ctx.lineTo(x + rx * 0.82, y - lineGap * 3.6);
     } else {
@@ -513,15 +655,26 @@
     }
     ctx.restore();
 
-    // Nome nota (piccolo, sotto il rigo)
-    if (isTarget) {
+    // Spunta su note già suonate
+    if (state === 'done') {
+      ctx.save();
+      ctx.fillStyle   = PAL.inkDim;
+      ctx.globalAlpha = 0.45;
+      ctx.font        = `${lineGap * 0.6}px Georgia, serif`;
+      ctx.textAlign   = 'center';
+      ctx.fillText('✓', x + rx + lineGap * 0.55, y + lineGap * 0.22);
+      ctx.restore();
+    }
+
+    // Nome nota corrente (piccolo, sotto il rigo)
+    if (state === 'current') {
       const oct  = Math.floor(midi / 12) - 1;
       const name = NOTE_NAMES_IT[pc] + oct;
       ctx.save();
       ctx.fillStyle   = PAL.inkDim;
-      ctx.font        = `${lineGap * 0.7}px 'Courier New', monospace`;
-      ctx.textAlign   = 'center';
       ctx.globalAlpha = 0.7;
+      ctx.font        = `${lineGap * 0.68}px 'Courier New', monospace`;
+      ctx.textAlign   = 'center';
       ctx.fillText(name, x, staffY + lineGap * 2.4);
       ctx.restore();
     }
@@ -542,23 +695,48 @@
     }
   }
 
+  function drawPopups() {
+    for (const p of popups) {
+      const ease = 1 - (1 - p.t) * (1 - p.t);
+      const yOff = ease * lineGap * 3;
+      const a    = p.t < 0.55 ? 1 : 1 - (p.t - 0.55) / 0.45;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, a);
+      ctx.fillStyle   = p.color;
+      ctx.font        = `bold ${lineGap * 0.85}px 'Courier New', monospace`;
+      ctx.textAlign   = 'center';
+      ctx.fillText(p.text, p.x, p.y - yOff);
+      ctx.restore();
+    }
+  }
+
   function drawHud() {
-    const fs = lineGap * 0.72;
+    const fs = lineGap * 0.70;
+
+    // Punteggio (in alto a sinistra)
+    ctx.save();
     ctx.font      = `${fs}px 'Courier New', monospace`;
-    ctx.fillStyle = PAL.inkDim;
-
-    // Punteggio
+    ctx.fillStyle = PAL.gold;
     ctx.textAlign = 'left';
-    ctx.fillText(score + (score === 1 ? ' battuta' : ' battute'), W * 0.06, fs * 1.3);
+    ctx.fillText(String(score), W * 0.06, fs * 1.5);
 
-    // Vite (♪ = vita)
-    ctx.font = `${lineGap * 0.88}px Georgia, serif`;
-    let lx = W * 0.94;
-    for (let i = 2; i >= 0; i--) {
-      ctx.fillStyle = i < lives ? PAL.accent : 'rgba(90,122,153,0.22)';
+    // Livello (sotto lo score, dal livello 1 in poi)
+    if (noteIndex >= 10) {
+      const lv = Math.min(4, Math.floor((noteIndex - 10) / 10)) + 1;
+      ctx.font      = `${fs * 0.68}px 'Courier New', monospace`;
+      ctx.fillStyle = PAL.inkDim;
+      ctx.fillText('lv ' + lv, W * 0.06, fs * 2.5);
+    }
+    ctx.restore();
+
+    // Errori (in alto a destra)
+    if (errorCount > 0) {
+      ctx.save();
+      ctx.font      = `${fs}px 'Courier New', monospace`;
+      ctx.fillStyle = PAL.err;
       ctx.textAlign = 'right';
-      ctx.fillText('♪', lx, lineGap * 0.92);
-      lx -= lineGap;
+      ctx.fillText(errorCount + ' ✗', W * 0.94, fs * 1.5);
+      ctx.restore();
     }
   }
 
@@ -577,19 +755,17 @@
      (6) LOOP PRINCIPALE
      ==================================================================== */
 
-  let rafId    = null;
-  let lastTs   = 0;
-  let running  = false;
+  let rafId   = null;
+  let lastTs  = 0;
+  let running = false;
 
   function loop(ts) {
     if (!running) return;
     const dt = Math.min(0.05, (ts - lastTs) / 1000 || 0);
     lastTs = ts;
-
     pollAudio();
     updateGame(dt);
     render();
-
     rafId = requestAnimationFrame(loop);
   }
 
@@ -606,16 +782,16 @@
   }
 
   /* ====================================================================
-     (7) DOM — elementi e pulizia
+     (7) DOM
      ==================================================================== */
 
   let elStart, elStartBtn;
   let elCalib, elCalibText;
-  let elGameOver, elRestartBtn, elFinalScore;
+  let elGameOver, elRestartBtn, elFinalScore, elFinalErrors, elFinalAcc;
   let elGameBar, elExitBtn;
   let initialized = false;
 
-  function stopPianoforte() {
+  function resetToStart() {
     stopLoop();
     releaseMic();
     gameState = 'idle';
@@ -624,11 +800,16 @@
     if (elCalib)    elCalib.classList.add('hidden');
     if (elStart)    elStart.classList.remove('hidden');
     if (elStartBtn) { elStartBtn.disabled = false; elStartBtn.textContent = 'Inizia'; }
+    render();
+  }
+
+  function stopPianoforte() {
+    resetToStart();
   }
   window.stopPianoforte = stopPianoforte;
 
   /* ====================================================================
-     (8) HTML INJECTION — chiamata dal router
+     (8) HTML INJECTION
      ==================================================================== */
 
   function creaPianoforte() {
@@ -639,34 +820,47 @@
         <canvas id="gameCanvas"></canvas>
 
         <div id="gameBar" class="pf-gamebar hidden">
-          <button id="exitBtn" class="pf-iconbtn" aria-label="Esci">✕</button>
+          <button id="exitBtn" class="pf-iconbtn" aria-label="Pausa / risultati">✕</button>
         </div>
 
+        <!-- START -->
         <div id="startScreen" class="pf-overlay">
           <p class="pf-eyebrow">Sala 131 · il Pianoforte</p>
           <h1 class="pf-title">Il Direttore</h1>
           <div class="pf-rule"></div>
           <p class="pf-subtitle">Leggi le note sul pentagramma<br>e suonale al pianoforte.</p>
           <button id="startBtn" class="pf-bigBtn">Inizia</button>
-          <p class="pf-hint">Tieni il telefono orizzontale vicino al pianoforte.<br>Useremo il microfono.</p>
+          <p class="pf-hint">Tieni il telefono vicino al pianoforte.<br>Useremo il microfono.</p>
           <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna indietro</button>
         </div>
 
+        <!-- CALIBRAZIONE -->
         <div id="calibScreen" class="pf-overlay hidden">
-          <p class="pf-eyebrow">Accordatura</p>
+          <p class="pf-eyebrow">Accordatura ambiente</p>
           <p id="calibText" class="pf-title pf-title--sm">Silenzio…</p>
           <div class="pf-rule"></div>
           <p class="pf-subtitle">Non fare rumori.<br>Stiamo misurando il rumore di fondo.</p>
         </div>
 
+        <!-- RIEPILOGO -->
         <div id="gameOverScreen" class="pf-overlay hidden">
           <p class="pf-eyebrow">Fine del concerto</p>
           <h2 class="pf-title pf-title--sm">Sipario</h2>
           <div class="pf-rule"></div>
-          <p class="pf-subtitle">
-            <span id="finalScore" class="pf-finalNum">0</span><br>
-            battute dirette
-          </p>
+          <div class="pf-statsGrid">
+            <div class="pf-stat">
+              <span class="pf-statVal pf-statVal--gold" id="finalScore">0</span>
+              <span class="pf-statLbl">punti</span>
+            </div>
+            <div class="pf-stat">
+              <span class="pf-statVal" id="finalAcc">—</span>
+              <span class="pf-statLbl">precisione</span>
+            </div>
+            <div class="pf-stat">
+              <span class="pf-statVal pf-statVal--err" id="finalErrors">0</span>
+              <span class="pf-statLbl">errori</span>
+            </div>
+          </div>
           <div class="pf-btnRow">
             <button id="restartBtn" class="pf-bigBtn">Da capo</button>
           </div>
@@ -678,18 +872,20 @@
   window.creaPianoforte = creaPianoforte;
 
   function cacheElements() {
-    canvas       = document.getElementById('gameCanvas');
+    canvas        = document.getElementById('gameCanvas');
     if (!canvas) return false;
-    ctx          = canvas.getContext('2d');
-    elStart      = document.getElementById('startScreen');
-    elStartBtn   = document.getElementById('startBtn');
-    elCalib      = document.getElementById('calibScreen');
-    elCalibText  = document.getElementById('calibText');
-    elGameOver   = document.getElementById('gameOverScreen');
-    elRestartBtn = document.getElementById('restartBtn');
-    elFinalScore = document.getElementById('finalScore');
-    elGameBar    = document.getElementById('gameBar');
-    elExitBtn    = document.getElementById('exitBtn');
+    ctx           = canvas.getContext('2d');
+    elStart       = document.getElementById('startScreen');
+    elStartBtn    = document.getElementById('startBtn');
+    elCalib       = document.getElementById('calibScreen');
+    elCalibText   = document.getElementById('calibText');
+    elGameOver    = document.getElementById('gameOverScreen');
+    elRestartBtn  = document.getElementById('restartBtn');
+    elFinalScore  = document.getElementById('finalScore');
+    elFinalErrors = document.getElementById('finalErrors');
+    elFinalAcc    = document.getElementById('finalAcc');
+    elGameBar     = document.getElementById('gameBar');
+    elExitBtn     = document.getElementById('exitBtn');
     return true;
   }
 
@@ -703,13 +899,14 @@
       return;
     }
     elStart.classList.add('hidden');
-    startLoop();        // avvia il loop (render + pollAudio)
-    startCalibration(); // cambia gameState → calibrating
+    startLoop();
+    startCalibration();
   }
 
   /* ====================================================================
-     PUNTO DI INGRESSO — chiamato dal router ogni volta che si entra
+     PUNTO DI INGRESSO
      ==================================================================== */
+
   function avviaPianoforteInit() {
     if (!document.getElementById('gameCanvas')) creaPianoforte();
     if (!cacheElements()) return;
@@ -725,15 +922,19 @@
     if (elStartBtn)   elStartBtn.onclick   = onStartTap;
     if (elRestartBtn) elRestartBtn.onclick = () => {
       elGameOver.classList.add('hidden');
+      startLoop();        // riavvia il loop (era stato fermato da showSummary)
       startCalibration();
     };
     if (elExitBtn) elExitBtn.onclick = () => {
-      if (window.stopPianoforte) window.stopPianoforte();
-      mostraPagina('menu');
+      if (gameState === 'playing') {
+        showSummary(); // mostra riepilogo senza perdere lo stato
+      } else {
+        resetToStart();
+        mostraPagina('menu');
+      }
     };
 
-    stopPianoforte(); // stato pulito alla (ri)entrata
-    render();         // disegna lo sfondo anche prima di iniziare
+    resetToStart(); // stato pulito all'entrata (anche se si torna dalla stessa pagina)
   }
   window.avviaPianoforteInit = avviaPianoforteInit;
 
