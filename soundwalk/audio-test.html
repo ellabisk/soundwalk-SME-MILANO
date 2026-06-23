@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Audio Test — Pitch Detection</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #080d16;
+  color: #c8d8e8;
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 16px 40px;
+  gap: 16px;
+}
+
+/* ── Banner apertura ── */
+#openNote {
+  width: 100%;
+  max-width: 640px;
+  background: #12203a;
+  border: 1px solid #2a4060;
+  border-radius: 4px;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: #7a9ab8;
+  line-height: 1.6;
+}
+#openNote code { color: #7fd4e8; }
+
+/* ── Pulsante avvio ── */
+#startBtn {
+  padding: 12px 36px;
+  background: transparent;
+  border: 1px solid #7fd4e8;
+  color: #7fd4e8;
+  font-family: inherit;
+  font-size: 16px;
+  border-radius: 2px;
+  cursor: pointer;
+  letter-spacing: 0.08em;
+  transition: background 0.15s;
+}
+#startBtn:hover { background: rgba(127,212,232,0.08); }
+#startBtn:disabled { border-color: #2a4060; color: #2a4060; cursor: default; background: transparent; }
+
+/* ── Nota rilevata ── */
+#noteBox {
+  width: 100%;
+  max-width: 640px;
+  background: #0d1a2e;
+  border: 1px solid #1e3050;
+  border-radius: 4px;
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+#noteName {
+  font-size: 64px;
+  font-weight: bold;
+  color: #7fd4e8;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  min-width: 140px;
+}
+#noteRight {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+#noteHz {
+  font-size: 20px;
+  color: #9ab8d0;
+}
+#noteCents {
+  font-size: 13px;
+  color: #5a7a99;
+}
+#onsetFlash {
+  font-size: 28px;
+  color: #1e3050;
+  transition: color 0.05s, text-shadow 0.05s;
+  user-select: none;
+}
+
+/* ── VU meter ── */
+#vuWrap {
+  width: 100%;
+  max-width: 640px;
+  height: 14px;
+  background: #0d1a2e;
+  border: 1px solid #1e3050;
+  border-radius: 2px;
+  overflow: hidden;
+}
+#vuFill {
+  height: 100%;
+  width: 0%;
+  background: #5a7a99;
+  transition: width 0.04s linear, background 0.1s;
+}
+
+/* ── FFT canvas ── */
+#fftCanvas {
+  width: 100%;
+  max-width: 640px;
+  height: 120px;
+  border: 1px solid #1e3050;
+  border-radius: 2px;
+  background: #080d16;
+  display: block;
+}
+
+/* ── Selettore algoritmo ── */
+#algoRow {
+  width: 100%;
+  max-width: 640px;
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+#algoRow label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  color: #7a9ab8;
+  font-size: 14px;
+}
+#algoRow input[type="radio"] { accent-color: #7fd4e8; cursor: pointer; }
+#algoRow label.active { color: #7fd4e8; }
+#algoTitle {
+  font-size: 12px;
+  color: #3a5a78;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin-right: 8px;
+}
+
+/* ── Sliders ── */
+#paramsBox {
+  width: 100%;
+  max-width: 640px;
+  background: #0d1a2e;
+  border: 1px solid #1e3050;
+  border-radius: 4px;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.paramRow {
+  display: grid;
+  grid-template-columns: 180px 1fr 56px;
+  align-items: center;
+  gap: 10px;
+}
+.paramLabel { color: #5a7a99; font-size: 13px; }
+input[type="range"] { width: 100%; accent-color: #7fd4e8; cursor: pointer; }
+.paramVal { color: #7fd4e8; font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ── Sezione YIN-only (nascosta per HPS/NSDF) ── */
+.yin-only { display: flex; }
+.hps-only { display: none; }
+
+/* ── Debug ── */
+#debugInfo {
+  width: 100%;
+  max-width: 640px;
+  font-size: 12px;
+  color: #3a5a78;
+  letter-spacing: 0.03em;
+  height: 18px;
+}
+
+/* ── Log note ── */
+#logBox {
+  width: 100%;
+  max-width: 640px;
+}
+#logTitle {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #2a4060;
+  margin-bottom: 8px;
+}
+#noteLog {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 30px;
+  font-size: 13px;
+  color: #3a5a78;
+}
+.logEntry { display: flex; gap: 12px; }
+.logNote { color: #9ab8d0; min-width: 60px; font-weight: bold; }
+.logMeta { color: #3a5a78; }
+.logNew { color: #7fd4e8; }
+.logNew .logNote { color: #7fd4e8; }
+</style>
+</head>
+<body>
+
+<div id="openNote">
+  ⚠ <strong>getUserMedia richiede HTTPS o localhost.</strong><br>
+  Se il browser blocca il microfono su <code>file://</code>, lancia un server locale:<br>
+  <code>cd Desktop/soundwalk-SME-MILANO/soundwalk &amp;&amp; python3 -m http.server 8080</code><br>
+  poi apri <code>http://localhost:8080/audio-test.html</code>
+</div>
+
+<button id="startBtn">▶ Avvia microfono</button>
+
+<div id="noteBox">
+  <div id="noteName">—</div>
+  <div id="noteRight">
+    <div id="noteHz">—</div>
+    <div id="noteCents">—</div>
+    <div id="onsetFlash">●</div>
+  </div>
+</div>
+
+<div id="vuWrap"><div id="vuFill"></div></div>
+
+<canvas id="fftCanvas"></canvas>
+
+<div id="algoRow">
+  <span id="algoTitle">Algoritmo:</span>
+  <label class="active"><input type="radio" name="algo" value="yin" checked> YIN</label>
+  <label><input type="radio" name="algo" value="hps"> HPS</label>
+  <label><input type="radio" name="algo" value="nsdf"> NSDF (attuale)</label>
+</div>
+
+<div id="paramsBox">
+  <div class="paramRow yin-only" id="rowYinThresh">
+    <span class="paramLabel">YIN threshold</span>
+    <input type="range" id="yinThresh" min="0.05" max="0.30" step="0.01" value="0.12">
+    <span class="paramVal" id="yinThreshVal">0.12</span>
+  </div>
+  <div class="paramRow hps-only" id="rowHpsDec">
+    <span class="paramLabel">HPS decimazioni</span>
+    <input type="range" id="hpsDec" min="2" max="5" step="1" value="4">
+    <span class="paramVal" id="hpsDecVal">4</span>
+  </div>
+  <div class="paramRow">
+    <span class="paramLabel">RMS threshold</span>
+    <input type="range" id="rmsThresh" min="0.001" max="0.05" step="0.001" value="0.010">
+    <span class="paramVal" id="rmsThreshVal">0.010</span>
+  </div>
+  <div class="paramRow">
+    <span class="paramLabel">Refrattario (ms)</span>
+    <input type="range" id="refractMs" min="50" max="600" step="10" value="200">
+    <span class="paramVal" id="refractMsVal">200</span>
+  </div>
+  <div class="paramRow">
+    <span class="paramLabel">Onset sensitivity</span>
+    <input type="range" id="onsetSens" min="0.003" max="0.05" step="0.001" value="0.015">
+    <span class="paramVal" id="onsetSensVal">0.015</span>
+  </div>
+</div>
+
+<div id="debugInfo">—</div>
+
+<div id="logBox">
+  <div id="logTitle">Ultimi onset rilevati</div>
+  <div id="noteLog">Nessuna nota ancora</div>
+</div>
+
+<script>
+/* ================================================================
+   PARAMETRI (modificabili via slider)
+   ================================================================ */
+let ALGO         = 'yin';
+let YIN_THRESH   = 0.12;
+let HPS_DEC      = 4;
+let RMS_THRESH   = 0.010;
+let REFRACTORY   = 200;    // ms
+let ONSET_SENS   = 0.015;  // soglia derivata RMS
+
+/* ================================================================
+   STATO
+   ================================================================ */
+let audioCtx   = null;
+let analyser   = null;
+let timeBuf    = null;
+let freqBuf    = null;
+let sampleRate = 44100;
+const FFT_SIZE = 4096;
+
+let prevRmsShort   = 0;
+let lastOnsetMs    = -9999;
+let onsetFlashEnd  = 0;
+let currentMidi    = -1;
+
+const noteHistory  = [];
+const MAX_HISTORY  = 10;
+
+/* ================================================================
+   NOMI NOTE
+   ================================================================ */
+const NAMES_IT = ["DO","DO#","RE","RE#","MI","FA","FA#","SOL","SOL#","LA","LA#","SI"];
+
+function freqToMidi(f) { return 12 * Math.log2(f / 440) + 69; }
+function midiInfo(midi) {
+  const r = Math.round(midi);
+  const pc = ((r % 12) + 12) % 12;
+  const oct = Math.floor(r / 12) - 1;
+  const cents = Math.round((midi - r) * 100);
+  return { name: NAMES_IT[pc], oct, cents, midi: r };
+}
+
+/* ================================================================
+   RMS helpers
+   ================================================================ */
+function rmsOf(buf) {
+  let s = 0;
+  for (let i = 0; i < buf.length; i++) s += buf[i] * buf[i];
+  return Math.sqrt(s / buf.length);
+}
+
+// RMS sugli ultimi `n` campioni (più reattivo agli attacchi)
+function rmsLast(buf, n) {
+  const start = Math.max(0, buf.length - n);
+  let s = 0, count = buf.length - start;
+  for (let i = start; i < buf.length; i++) s += buf[i] * buf[i];
+  return Math.sqrt(s / count);
+}
+
+/* ================================================================
+   ALGORITMO 1: YIN
+   Ref: de Cheveigné & Kawahara (2002), JASA 111(4).
+   Usa la CMNDF per trovare il periodo fondamentale.
+   Molto più robusto di NSDF sulle armoniche del pianoforte.
+   ================================================================ */
+function yin(buf, sr, thresh) {
+  const N  = buf.length;
+  const W  = Math.floor(N / 2);         // integration window
+  const t1 = Math.ceil(sr / 1400);      // tau min → FMAX
+  const t2 = Math.min(W - 1, Math.floor(sr / 70)); // tau max → FMIN
+
+  // Step 1: difference function d[tau]
+  const d = new Float32Array(t2 + 1);
+  for (let tau = 1; tau <= t2; tau++) {
+    let sum = 0;
+    for (let j = 0; j < W; j++) {
+      const x = buf[j] - buf[j + tau];
+      sum += x * x;
+    }
+    d[tau] = sum;
+  }
+
+  // Step 2: cumulative mean normalized difference d'[tau]
+  const cmnd = new Float32Array(t2 + 1);
+  cmnd[0] = 1;
+  let run = 0;
+  for (let tau = 1; tau <= t2; tau++) {
+    run += d[tau];
+    cmnd[tau] = run > 0 ? (d[tau] * tau) / run : 1;
+  }
+
+  // Step 3: trova il primo tau in [t1,t2] dove cmnd < thresh
+  for (let tau = t1; tau <= t2; tau++) {
+    if (cmnd[tau] < thresh) {
+      // scivola fino al minimo locale
+      while (tau + 1 <= t2 && cmnd[tau + 1] < cmnd[tau]) tau++;
+      // interpolazione parabolica
+      let ft = tau;
+      if (tau > 1 && tau < t2) {
+        const a = cmnd[tau - 1], b = cmnd[tau], c = cmnd[tau + 1];
+        const den = a - 2 * b + c;
+        if (Math.abs(den) > 1e-12) ft = tau + 0.5 * (a - c) / den;
+      }
+      return { freq: sr / ft, clarity: 1 - cmnd[tau] };
+    }
+  }
+
+  // Nessun dip trovato: restituisce il minimo assoluto nel range (bassa confidence)
+  let bt = t1, bv = cmnd[t1];
+  for (let t = t1 + 1; t <= t2; t++) { if (cmnd[t] < bv) { bv = cmnd[t]; bt = t; } }
+  return { freq: sr / bt, clarity: 1 - bv };
+}
+
+/* ================================================================
+   ALGORITMO 2: HPS (Harmonic Product Spectrum)
+   Usa la FFT già calcolata dall'AnalyserNode (lineare).
+   Moltiplica lo spettro con le versioni decimato ×2,×3,…
+   Il fondamentale "sopravvive", le armoniche si cancellano.
+   ================================================================ */
+function hps(linMag, sr, fftSize, nDec) {
+  const binHz  = sr / fftSize;
+  const bMin   = Math.ceil(70 / binHz);
+  const hpsLen = Math.floor(linMag.length / nDec);
+  const bMax   = Math.min(hpsLen - 1, Math.floor(1400 / binHz));
+
+  const h = new Float32Array(hpsLen);
+  for (let i = bMin; i <= bMax; i++) {
+    h[i] = linMag[i];
+    for (let k = 2; k <= nDec; k++) {
+      const idx = Math.round(i * k);
+      h[i] *= idx < linMag.length ? linMag[idx] : 0;
+    }
+  }
+
+  let pb = bMin, pv = h[bMin];
+  for (let i = bMin + 1; i <= bMax; i++) { if (h[i] > pv) { pv = h[i]; pb = i; } }
+
+  // Interpolazione parabolica
+  let fb = pb;
+  if (pb > 0 && pb < hpsLen - 1) {
+    const a = h[pb-1], b = h[pb], c = h[pb+1];
+    const den = a - 2*b + c;
+    if (Math.abs(den) > 1e-12) fb = pb - 0.5 * (c - a) / den;
+  }
+
+  // Clarity: rapporto picco / media del range
+  let tot = 0, cnt = bMax - bMin + 1;
+  for (let i = bMin; i <= bMax; i++) tot += h[i];
+  const clarity = tot > 0 ? Math.min(1, (pv / (tot / cnt)) / 15) : 0;
+
+  return { freq: fb * binHz, clarity };
+}
+
+/* ================================================================
+   ALGORITMO 3: NSDF / MPM (baseline — codice originale)
+   Autocorrelazione normalizzata. Usato come confronto.
+   ================================================================ */
+function nsdf(buf, sr) {
+  const SIZE   = buf.length;
+  const minLag = Math.floor(sr / 1400);
+  const maxLag = Math.min(Math.floor(sr / 70), Math.floor(SIZE / 2));
+  const ns     = new Float32Array(maxLag + 1);
+
+  for (let tau = minLag; tau <= maxLag; tau++) {
+    let r = 0, m = 0;
+    for (let i = 0; i < SIZE - tau; i++) {
+      const a = buf[i], b = buf[i + tau];
+      r += a * b; m += a*a + b*b;
+    }
+    ns[tau] = m > 0 ? (2 * r) / m : 0;
+  }
+
+  let pos = minLag;
+  while (pos <= maxLag && ns[pos] > 0) pos++;
+  while (pos <= maxLag && ns[pos] <= 0) pos++;
+
+  let bestLag = -1, bestVal = 0, curL = -1, curV = -Infinity;
+  for (let tau = pos; tau <= maxLag; tau++) {
+    const v = ns[tau];
+    if (v > curV) { curV = v; curL = tau; }
+    if (v <= 0 && curL !== -1) {
+      if (curV > bestVal) { bestVal = curV; bestLag = curL; }
+      curV = -Infinity; curL = -1;
+      while (tau + 1 <= maxLag && ns[tau + 1] <= 0) tau++;
+    }
+  }
+  if (curL !== -1 && curV > bestVal) { bestVal = curV; bestLag = curL; }
+
+  if (bestLag <= 0) return { freq: -1, clarity: 0 };
+
+  let lag = bestLag;
+  if (bestLag > minLag && bestLag < maxLag) {
+    const x0 = ns[bestLag-1], x1 = ns[bestLag], x2 = ns[bestLag+1];
+    const den = x0 - 2*x1 + x2;
+    if (den !== 0) lag = bestLag + 0.5 * (x0 - x2) / den;
+  }
+  return { freq: sr / lag, clarity: bestVal };
+}
+
+/* ================================================================
+   LOOP PRINCIPALE
+   ================================================================ */
+function poll() {
+  if (!analyser) return;
+
+  analyser.getFloatTimeDomainData(timeBuf);
+  analyser.getFloatFrequencyData(freqBuf);
+
+  const rmsAll   = rmsOf(timeBuf);
+  const rmsShort = rmsLast(timeBuf, 512); // ultimi ~11ms
+  const dRms     = rmsShort - prevRmsShort;
+  prevRmsShort   = rmsShort;
+  const now      = performance.now();
+
+  // VU meter
+  const pct = Math.min(100, (rmsAll / 0.25) * 100);
+  const vuEl = document.getElementById('vuFill');
+  vuEl.style.width = pct.toFixed(1) + '%';
+  vuEl.style.background = rmsAll >= RMS_THRESH ? '#7fd4e8' : '#1e3050';
+
+  // FFT display
+  drawFFT();
+
+  // Silenzio → nessuna analisi
+  if (rmsAll < RMS_THRESH) {
+    showNote(null, rmsAll, false);
+    return;
+  }
+
+  // Pitch detection
+  let result = null;
+  if (ALGO === 'yin') {
+    result = yin(timeBuf, sampleRate, YIN_THRESH);
+  } else if (ALGO === 'hps') {
+    const linMag = new Float32Array(freqBuf.length);
+    for (let i = 0; i < freqBuf.length; i++) linMag[i] = Math.pow(10, freqBuf[i] / 20);
+    result = hps(linMag, sampleRate, FFT_SIZE, HPS_DEC);
+  } else {
+    result = nsdf(timeBuf, sampleRate);
+  }
+
+  if (!result || result.freq <= 0) { showNote(null, rmsAll, false); return; }
+
+  const midiExact = freqToMidi(result.freq);
+  const info = midiInfo(midiExact);
+
+  // Onset: picco di energia (dRms) sopra soglia + periodo refrattario
+  const isOnset = dRms > ONSET_SENS
+    && rmsAll >= RMS_THRESH
+    && (now - lastOnsetMs) > REFRACTORY;
+
+  if (isOnset) {
+    lastOnsetMs  = now;
+    onsetFlashEnd = now + 350;
+    currentMidi  = info.midi;
+    // storico
+    noteHistory.unshift({ label: info.name + info.oct, freq: result.freq.toFixed(1), clarity: result.clarity.toFixed(2), t: new Date().toLocaleTimeString('it-IT', { hour12: false }) });
+    if (noteHistory.length > MAX_HISTORY) noteHistory.pop();
+    renderLog();
+  }
+
+  showNote({ info, freq: result.freq, clarity: result.clarity }, rmsAll, isOnset);
+
+  document.getElementById('debugInfo').textContent =
+    'RMS ' + rmsAll.toFixed(4) +
+    ' · dRMS ' + dRms.toFixed(4) +
+    ' · clarity ' + result.clarity.toFixed(3) +
+    ' · algo ' + ALGO.toUpperCase() +
+    ' · sr ' + sampleRate;
+}
+
+function showNote(r, rms, isOnset) {
+  const nameEl   = document.getElementById('noteName');
+  const hzEl     = document.getElementById('noteHz');
+  const centsEl  = document.getElementById('noteCents');
+  const onsetEl  = document.getElementById('onsetFlash');
+  const now      = performance.now();
+  const flashing = now < onsetFlashEnd;
+
+  onsetEl.style.color      = flashing ? '#6fcf8e' : '#1e3050';
+  onsetEl.style.textShadow = flashing ? '0 0 14px #6fcf8e' : 'none';
+
+  if (r) {
+    nameEl.textContent = r.info.name + r.info.oct;
+    hzEl.textContent   = r.freq.toFixed(2) + ' Hz';
+    const c = r.info.cents;
+    centsEl.textContent = (c >= 0 ? '+' + c : c) + '¢  ·  clar ' + r.clarity.toFixed(2);
+    nameEl.style.color = flashing ? '#6fcf8e' : '#7fd4e8';
+  } else {
+    nameEl.textContent = rms >= RMS_THRESH ? '?' : '—';
+    hzEl.textContent   = rms >= RMS_THRESH ? 'pitch incerto' : 'silenzio';
+    centsEl.textContent = '';
+    nameEl.style.color = '#1e3050';
+  }
+}
+
+function drawFFT() {
+  const canvas = document.getElementById('fftCanvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  if (!W || !H) return;
+
+  ctx.fillStyle = '#080d16';
+  ctx.fillRect(0, 0, W, H);
+
+  // Mostra fino a 2500 Hz
+  const maxHz  = 2500;
+  const maxBin = Math.min(freqBuf.length - 1, Math.floor(maxHz * FFT_SIZE / sampleRate));
+
+  for (let i = 1; i <= maxBin; i++) {
+    const db   = freqBuf[i]; // -160..0
+    const norm = Math.max(0, (db + 90) / 90);
+    const bH   = norm * H;
+    const x    = (i / maxBin) * W;
+    const bW   = Math.max(1, W / maxBin);
+    ctx.fillStyle = norm > 0.6 ? '#7fd4e8' : norm > 0.3 ? '#2e6a8a' : '#122030';
+    ctx.fillRect(x, H - bH, bW, bH);
+  }
+
+  // Linee verticali di riferimento (frequenze)
+  ctx.font      = '10px monospace';
+  ctx.textAlign = 'center';
+  for (const hz of [130, 261, 392, 523, 784, 1046, 1568, 2093]) {
+    const x = (hz / maxHz) * W;
+    if (x >= W) continue;
+    ctx.strokeStyle = 'rgba(90,122,153,0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H - 14); ctx.stroke();
+    ctx.fillStyle = '#2a4a6a';
+    ctx.fillText(hz >= 1000 ? (hz / 1000).toFixed(1) + 'k' : hz, x, H - 2);
+  }
+}
+
+function renderLog() {
+  const el = document.getElementById('noteLog');
+  if (!noteHistory.length) { el.innerHTML = 'Nessuna nota ancora'; return; }
+  el.innerHTML = noteHistory.map((n, i) =>
+    `<div class="logEntry${i === 0 ? ' logNew' : ''}">` +
+    `<span class="logNote">${n.label}</span>` +
+    `<span class="logMeta">${n.freq} Hz · clar ${n.clarity} · ${n.t}</span>` +
+    `</div>`
+  ).join('');
+}
+
+/* ================================================================
+   AVVIO MICROFONO
+   ================================================================ */
+async function startAudio() {
+  const btn = document.getElementById('startBtn');
+  btn.textContent = 'Connessione…';
+  btn.disabled = true;
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation:  false,
+        noiseSuppression:  false,
+        autoGainControl:   false,
+      }
+    });
+
+    audioCtx   = new (window.AudioContext || window.webkitAudioContext)();
+    sampleRate = audioCtx.sampleRate;
+
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize               = FFT_SIZE;
+    analyser.smoothingTimeConstant = 0.2;  // lieve smoothing solo per la visualizzazione
+
+    const src = audioCtx.createMediaStreamSource(stream);
+    src.connect(analyser); // NO destination → niente feedback
+
+    timeBuf = new Float32Array(analyser.fftSize);
+    freqBuf = new Float32Array(analyser.frequencyBinCount);
+
+    // Calibra canvas
+    const canvas = document.getElementById('fftCanvas');
+    const rect   = canvas.getBoundingClientRect();
+    canvas.width  = Math.round(rect.width);
+    canvas.height = Math.round(rect.height);
+
+    btn.textContent = '● Microfono attivo';
+    btn.style.color       = '#6fcf8e';
+    btn.style.borderColor = '#6fcf8e';
+
+    function loop() { poll(); requestAnimationFrame(loop); }
+    loop();
+
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '▶ Avvia microfono';
+    alert(
+      'Errore microfono: ' + e.message +
+      '\n\nSe sei su file://, lancia:\n  python3 -m http.server 8080\n' +
+      'poi apri http://localhost:8080/audio-test.html'
+    );
+  }
+}
+
+/* ================================================================
+   CONTROLLI UI
+   ================================================================ */
+document.getElementById('startBtn').onclick = startAudio;
+
+// Radio algoritmo
+document.querySelectorAll('input[name="algo"]').forEach(r => {
+  r.onchange = () => {
+    ALGO = r.value;
+    // mostra/nasconde parametri specifici per algoritmo
+    document.querySelectorAll('.yin-only').forEach(el =>
+      el.style.display = ALGO === 'yin' ? 'grid' : 'none');
+    document.querySelectorAll('.hps-only').forEach(el =>
+      el.style.display = ALGO === 'hps' ? 'grid' : 'none');
+    // aggiorna label attivo
+    document.querySelectorAll('#algoRow label').forEach(l => l.classList.remove('active'));
+    r.closest('label').classList.add('active');
+  };
+});
+
+// Sliders
+function slider(id, valId, setter, fmt) {
+  const el = document.getElementById(id);
+  const vl = document.getElementById(valId);
+  el.oninput = () => {
+    const v = parseFloat(el.value);
+    setter(v);
+    vl.textContent = fmt ? fmt(v) : String(v);
+  };
+}
+slider('yinThresh', 'yinThreshVal', v => YIN_THRESH = v,  v => v.toFixed(2));
+slider('hpsDec',    'hpsDecVal',    v => HPS_DEC    = v,  v => String(Math.round(v)));
+slider('rmsThresh', 'rmsThreshVal', v => RMS_THRESH = v,  v => v.toFixed(3));
+slider('refractMs', 'refractMsVal', v => REFRACTORY = v,  v => String(Math.round(v)));
+slider('onsetSens', 'onsetSensVal', v => ONSET_SENS = v,  v => v.toFixed(3));
+
+// Resize canvas se la finestra cambia
+window.onresize = () => {
+  const canvas = document.getElementById('fftCanvas');
+  const rect   = canvas.getBoundingClientRect();
+  canvas.width  = Math.round(rect.width);
+  canvas.height = Math.round(rect.height);
+};
+</script>
+</body>
+</html>
