@@ -44,9 +44,6 @@
   const NOTE_NAMES_IT = ['DO','DO#','RE','RE#','MI','FA','FA#','SOL','SOL#','LA','LA#','SI'];
   const WHITE_MIDIS   = [60,62,64,65,67,69,71,72,74,76,77,79,81,83];
 
-  const arpeggioImg = new Image();
-  arpeggioImg.src   = 'arpeggio.svg';
-
   const TREBLE_BOTTOM_MIDI = 64;
   const PC_STEP = [0,0,1,1,2,3,3,4,4,5,5,6];
   const PC_ACC  = [0,1,0,1,0,0,1,0,1,0,1,0];
@@ -559,18 +556,6 @@
       ctx.fillStyle = PAL.inkDim;
       ctx.globalAlpha = 0.60;
       ctx.fillText(allNames, W * 0.045, staffY + lineGap * 3.25);
-      ctx.restore();
-    }
-
-    // Arpeggio: immagine SVG scalata tra la nota più bassa e più alta
-    if (isActive && isChord && arpeggioImg.complete) {
-      const topNoteY = staffYOf(notes[notes.length - 1]) - lineGap * 0.55;
-      const botNoteY = staffYOf(notes[0]) + lineGap * 0.55;
-      const imgH     = botNoteY - topNoteY;
-      const imgW     = Math.round(lineGap * 0.55);
-      ctx.save();
-      ctx.globalAlpha *= 0.85;
-      ctx.drawImage(arpeggioImg, x - lineGap * 1.3 - imgW * 0.5, topNoteY, imgW, imgH);
       ctx.restore();
     }
 
