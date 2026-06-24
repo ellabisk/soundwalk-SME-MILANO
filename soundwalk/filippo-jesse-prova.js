@@ -44,6 +44,9 @@
   const NOTE_NAMES_IT = ['DO','DO#','RE','RE#','MI','FA','FA#','SOL','SOL#','LA','LA#','SI'];
   const WHITE_MIDIS   = [60,62,64,65,67,69,71,72,74,76,77,79,81,83];
 
+  const arpeggioImg = new Image();
+  arpeggioImg.src   = 'arpeggio.svg';
+
   const TREBLE_BOTTOM_MIDI = 64;
   const PC_STEP = [0,0,1,1,2,3,3,4,4,5,5,6];
   const PC_ACC  = [0,1,0,1,0,0,1,0,1,0,1,0];
@@ -273,9 +276,9 @@
     canvas.height = Math.round(H*DPR);
     ctx.setTransform(DPR,0,0,DPR,0,0);
     ctx.imageSmoothingEnabled = false;
-    // Ottimizzato per telefono orizzontale — staff sotto i bottoni (top ~60px)
+    // Ottimizzato per telefono orizzontale — staff nella metà inferiore
     lineGap = Math.max(18, Math.round(H * 0.09));
-    staffY  = Math.round(H * 0.53);
+    staffY  = Math.round(H * 0.62);
     noteX   = Math.round(W * 0.56);
   }
 
@@ -485,13 +488,13 @@
 
   // Chiave di violino Unicode 𝄞 — baseline calibrata sul secondo rigo (G4)
   function drawTrebleClef(x, botY) {
-    const size = lineGap * 5.6;
+    const size = lineGap * 6.4;
     ctx.save();
     ctx.fillStyle    = PAL.gold;
     ctx.font         = `${size}px 'EB Garamond', Georgia, 'Times New Roman', serif`;
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText('\u{1D11E}', x, botY - lineGap * 0.5);
+    ctx.fillText('\u{1D11E}', x, botY + lineGap * 0.2);
     ctx.restore();
   }
 
@@ -530,31 +533,45 @@
     const isChord = notes.length > 1;
     const offsets = computeXOffsets(notes);
 
-    // Etichetta accordo: pannello sinistro, sotto la chiave di violino
+    // Etichetta accordo: pannello sinistro, sotto il rigo
     if (isActive && ch.chordLabel) {
       const rootPc   = ((notes[0] % 12) + 12) % 12;
       const rootOct  = Math.floor(notes[0] / 12) - 1;
       const rootName = NOTE_NAMES_IT[rootPc] + rootOct;
+      const allNames = notes.map(m => {
+        const pc = ((m%12)+12)%12; const oct = Math.floor(m/12)-1;
+        return NOTE_NAMES_IT[pc]+oct;
+      }).join(' + ');
       ctx.save();
       ctx.textAlign = 'left';
-      // nome fondamentale
-      ctx.font      = `${lineGap * 0.80}px 'Cormorant Garamond',Georgia,serif`;
+      // fondamentale
+      ctx.font      = `${lineGap * 0.82}px 'Cormorant Garamond',Georgia,serif`;
       ctx.fillStyle = PAL.note;
-      ctx.globalAlpha = 0.88;
-      ctx.fillText(rootName, W * 0.055, staffY + lineGap * 1.3);
-      // tipo accordo sotto
-      ctx.font      = `italic ${lineGap * 0.54}px 'EB Garamond',Georgia,serif`;
+      ctx.globalAlpha = 0.90;
+      ctx.fillText(rootName, W * 0.045, staffY + lineGap * 1.3);
+      // tipo accordo
+      ctx.font      = `italic ${lineGap * 0.56}px 'EB Garamond',Georgia,serif`;
       ctx.fillStyle = PAL.gold;
-      ctx.globalAlpha = 0.72;
-      ctx.fillText(ch.chordLabel, W * 0.055, staffY + lineGap * 2.05);
+      ctx.globalAlpha = 0.75;
+      ctx.fillText(ch.chordLabel, W * 0.045, staffY + lineGap * 2.05);
+      // note da suonare (per chi non conosce la teoria)
+      ctx.font      = `${lineGap * 0.50}px 'Courier New',monospace`;
+      ctx.fillStyle = PAL.inkDim;
+      ctx.globalAlpha = 0.60;
+      ctx.fillText(allNames, W * 0.045, staffY + lineGap * 2.85);
       ctx.restore();
     }
 
-    // Linea arpeggio ondulata (sostituisce la parentesi): notazione standard
-    if (isActive && isChord) {
-      const topNoteY = staffYOf(notes[notes.length - 1]) - lineGap * 0.5;
-      const botNoteY = staffYOf(notes[0]) + lineGap * 0.5;
-      drawArpeggioWave(x - lineGap * 1.2, topNoteY, botNoteY);
+    // Arpeggio: immagine SVG scalata tra la nota più bassa e più alta
+    if (isActive && isChord && arpeggioImg.complete) {
+      const topNoteY = staffYOf(notes[notes.length - 1]) - lineGap * 0.55;
+      const botNoteY = staffYOf(notes[0]) + lineGap * 0.55;
+      const imgH     = botNoteY - topNoteY;
+      const imgW     = Math.round(lineGap * 0.55);
+      ctx.save();
+      ctx.globalAlpha *= 0.85;
+      ctx.drawImage(arpeggioImg, x - lineGap * 1.3 - imgW * 0.5, topNoteY, imgW, imgH);
+      ctx.restore();
     }
 
     for (let i = 0; i < notes.length; i++) {
@@ -647,13 +664,13 @@
       ctx.stroke();
     }
 
-    // Diesis
+    // Diesis (a destra della testa di nota)
     if (PC_ACC[pc] === 1) {
       ctx.fillStyle   = state === 'current' ? PAL.gold : PAL.inkDim;
       ctx.font        = `${lineGap * 1.2}px Georgia,serif`;
-      ctx.textAlign   = 'right';
+      ctx.textAlign   = 'left';
       ctx.globalAlpha = state === 'current' ? 1 : 0.5;
-      ctx.fillText('♯', x - rx - lineGap * 0.25, y + lineGap * 0.38);
+      ctx.fillText('♯', x + rx + lineGap * 0.18, y + lineGap * 0.38);
     }
     ctx.restore();
 
@@ -706,34 +723,33 @@
   }
 
   function drawHud() {
-    const fs  = lineGap * 0.62;
-    // Posizione HUD: angolo in alto a sinistra, oltre la chiave (clef finisce ~W*0.18)
-    const hx  = W * 0.20;
-    const hy  = lineGap * 1.0; // distanza dal bordo superiore
+    const fs = lineGap * 0.62;
+    // Score/tempo a sinistra, errori accanto sulla stessa riga
+    const hx = W * 0.20;
+    const ex = W * 0.38; // errori a destra del punteggio
+    const hy = lineGap * 1.2;
     ctx.save();
+    ctx.textAlign = 'left';
 
     if (gameMode === 'ranked') {
       if (score > 0) {
-        ctx.font      = `${fs * 1.1}px 'Courier New',monospace`;
+        ctx.font = `${fs * 1.1}px 'Courier New',monospace`;
         ctx.fillStyle = PAL.gold;
-        ctx.textAlign = 'left';
         ctx.fillText(String(score), hx, hy);
       }
     } else {
       if (notesCorrect > 0) {
         const avg = (totalNoteTimeSec / notesCorrect).toFixed(1) + 's';
-        ctx.font      = `${fs}px 'Courier New',monospace`;
+        ctx.font = `${fs}px 'Courier New',monospace`;
         ctx.fillStyle = PAL.inkDim;
-        ctx.textAlign = 'left';
         ctx.fillText('⌀ ' + avg, hx, hy);
       }
     }
 
     if (errorCount > 0) {
-      ctx.font      = `${fs * 0.9}px 'Courier New',monospace`;
+      ctx.font = `${fs * 0.9}px 'Courier New',monospace`;
       ctx.fillStyle = PAL.err;
-      ctx.textAlign = 'left';
-      ctx.fillText(errorCount + ' ✗', hx, hy + fs * 1.4);
+      ctx.fillText(errorCount + ' ✗', ex, hy);
     }
 
     ctx.restore();
