@@ -52,22 +52,38 @@
 #pianoforte .pf-gamebar.hidden { display: none; }
 
 #pianoforte .pf-iconbtn {
-  width: 36px;
+  min-width: 46px;
   height: 36px;
-  background: rgba(13,27,42,0.7);
-  border: 1px solid var(--pf-staff);
+  background: rgba(13,27,42,0.82);
+  border: 1px solid rgba(212,168,67,0.42);
   color: var(--pf-inkdim);
-  font-size: 14px;
+  font-size: 16px;
+  font-family: 'Cormorant Garamond', Georgia, serif;
   border-radius: 2px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color 0.15s, border-color 0.15s;
+  padding: 0 13px;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  position: relative;
+  letter-spacing: 0.02em;
 }
+#pianoforte .pf-iconbtn::before,
+#pianoforte .pf-iconbtn::after {
+  content: '';
+  position: absolute;
+  left: 4px; right: 4px;
+  height: 1px;
+  background: var(--pf-gold);
+  opacity: 0.22;
+}
+#pianoforte .pf-iconbtn::before { top: 2px; }
+#pianoforte .pf-iconbtn::after  { bottom: 2px; }
 #pianoforte .pf-iconbtn:active {
   color: var(--pf-ink);
   border-color: var(--pf-gold);
+  background: rgba(212,168,67,0.08);
 }
 
 /* ── Overlay (start / calibrazione / game over) ── */

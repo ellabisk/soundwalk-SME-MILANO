@@ -73,7 +73,8 @@
 
   function buildRankedChord(typeIdx) {
     const { intervals } = CHORD_TYPES[typeIdx];
-    const roots = WHITE_MIDIS.filter(m => m >= 60 && m <= 72);
+    // Radice max G4 (67) → nota top max F5 (77, +10 semitoni)
+    const roots = WHITE_MIDIS.filter(m => m >= 60 && m <= 67);
     const root  = roots[Math.floor(Math.random() * roots.length)];
     return [root, ...intervals.map(i => root + i)].sort((a, b) => a - b);
   }
@@ -221,6 +222,7 @@
      ==================================================================== */
 
   let calibSamples = [];
+  let tuningNote = null, tuningTimer = null;
 
   function startCalibration() {
     gameState='calibrating'; calibSamples=[]; wasQuiet=true;
@@ -242,7 +244,14 @@
       RMS_THRESH = Math.min(RMS_THRESH, CALIB_MAX);
     }
     if (elCalib) elCalib.classList.add('hidden');
-    beginPlaying();
+    startTuning();
+  }
+
+  function startTuning() {
+    gameState = 'tuning';
+    wasQuiet = true; pendingNote = null; tuningNote = null;
+    // auto-avanza dopo 5s se nessuna nota rilevata
+    tuningTimer = setTimeout(beginPlaying, 5000);
   }
 
   /* ====================================================================
@@ -263,9 +272,9 @@
     canvas.height = Math.round(H*DPR);
     ctx.setTransform(DPR,0,0,DPR,0,0);
     ctx.imageSmoothingEnabled = false;
-    // Ottimizzato per telefono orizzontale: rigo più grande, centrato verticalmente
-    lineGap = Math.max(24, Math.round(H * 0.13));
-    staffY  = Math.round(H * 0.56);
+    // Ottimizzato per telefono orizzontale — note contenute nel viewport
+    lineGap = Math.max(18, Math.round(H * 0.09));
+    staffY  = Math.round(H * 0.46);
     noteX   = Math.round(W * 0.56);
   }
 
@@ -307,7 +316,9 @@
   ];
 
   function randomWhiteNote() {
-    return WHITE_MIDIS[Math.floor(Math.random()*WHITE_MIDIS.length)];
+    // cap a F5 (77) per stare nel viewport landscape
+    const pool = WHITE_MIDIS.filter(m => m <= 77);
+    return pool[Math.floor(Math.random() * pool.length)];
   }
 
   function generateFreeChallenge(idx) {
@@ -318,13 +329,13 @@
     const maxSize = Math.min(4,2+Math.floor(level/2));
     const size    = 2+Math.floor(Math.random()*(maxSize-1));
     const pool    = FREE_INTERVAL_POOL[level];
-    const roots   = WHITE_MIDIS.filter(m=>m>=60&&m<=79);
+    const roots   = WHITE_MIDIS.filter(m=>m>=60&&m<=67);
     const root    = roots[Math.floor(Math.random()*roots.length)];
     const notes   = [root];
     for (let i=1; i<size; i++) {
       const iv = pool[Math.floor(Math.random()*pool.length)];
       const nx = notes[notes.length-1]+iv;
-      if (nx<=84) notes.push(nx);
+      if (nx<=77) notes.push(nx);
     }
     return { notes:notes.sort((a,b)=>a-b), step:0, chordLabel:null };
   }
@@ -434,13 +445,15 @@
     frameN++;
     drawBg(); drawStaff();
     if (gameState==='playing' || gameState==='finishing') {
-      drawChallenge(); drawPopups(); drawHud(); drawOmino();
+      drawChallenge(); drawPopups(); drawHud();
       if (flashErr>0) {
         ctx.fillStyle=`rgba(193,102,107,${(flashErr*0.28).toFixed(3)})`;
         ctx.fillRect(0,0,W,H);
       }
     } else if (gameState==='calibrating') {
       drawListeningDot();
+    } else if (gameState==='tuning') {
+      drawTuningState();
     } else if (gameState==='paused') {
       // disegna la nota ferma sbiadita
       if (challenge && anim) {
@@ -471,14 +484,13 @@
 
   // Chiave di violino Unicode 𝄞 — baseline calibrata sul secondo rigo (G4)
   function drawTrebleClef(x, botY) {
-    const size = lineGap * 5.2;
+    const size = lineGap * 5.6;
     ctx.save();
     ctx.fillStyle    = PAL.gold;
     ctx.font         = `${size}px 'EB Garamond', Georgia, 'Times New Roman', serif`;
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'alphabetic';
-    // Baseline al secondo rigo dal basso (G4): curl della chiave si poggia su quel rigo.
-    ctx.fillText('\u{1D11E}', x, botY - lineGap * 1.0);
+    ctx.fillText('\u{1D11E}', x, botY - lineGap * 0.5);
     ctx.restore();
   }
 
@@ -517,15 +529,23 @@
     const isChord = notes.length > 1;
     const offsets = computeXOffsets(notes);
 
-    // Etichetta accordo: sopra la nota più alta, solo se attivo
+    // Etichetta accordo: pannello sinistro, sotto la chiave di violino
     if (isActive && ch.chordLabel) {
-      const topY = staffYOf(notes[notes.length - 1]);
+      const rootPc   = ((notes[0] % 12) + 12) % 12;
+      const rootOct  = Math.floor(notes[0] / 12) - 1;
+      const rootName = NOTE_NAMES_IT[rootPc] + rootOct;
       ctx.save();
-      ctx.font        = `italic ${lineGap * 0.54}px 'EB Garamond',Georgia,serif`;
-      ctx.fillStyle   = PAL.gold;
-      ctx.textAlign   = 'center';
+      ctx.textAlign = 'left';
+      // nome fondamentale
+      ctx.font      = `${lineGap * 0.80}px 'Cormorant Garamond',Georgia,serif`;
+      ctx.fillStyle = PAL.note;
+      ctx.globalAlpha = 0.88;
+      ctx.fillText(rootName, W * 0.055, staffY + lineGap * 1.3);
+      // tipo accordo sotto
+      ctx.font      = `italic ${lineGap * 0.54}px 'EB Garamond',Georgia,serif`;
+      ctx.fillStyle = PAL.gold;
       ctx.globalAlpha = 0.72;
-      ctx.fillText(ch.chordLabel, x + lineGap * 0.2, topY - lineGap * 1.2);
+      ctx.fillText(ch.chordLabel, W * 0.055, staffY + lineGap * 2.05);
       ctx.restore();
     }
 
@@ -647,8 +667,8 @@
       ctx.restore();
     }
 
-    // Nome nota corrente (sotto il rigo)
-    if (state === 'current') {
+    // Nome nota corrente (sotto il rigo) — solo note singole, non accordi
+    if (state === 'current' && drawStem) {
       const oct  = Math.floor(midi / 12) - 1;
       const name = NOTE_NAMES_IT[pc] + oct;
       ctx.save();
@@ -718,34 +738,29 @@
     ctx.restore();
   }
 
-  // Omino: piccolo indicatore di ascolto in basso a destra
-  function drawOmino() {
-    const cx = W*0.91;
-    const cy = H*0.88;
-    const r  = lineGap*0.28;
-    const pulse = 0.5+0.5*Math.sin(frameN*0.12);
-
-    ctx.save();
-    // Alone pulsante
-    ctx.fillStyle=PAL.note;
-    ctx.globalAlpha=0.08+pulse*0.10;
-    ctx.beginPath(); ctx.arc(cx,cy,r*2.2,0,Math.PI*2); ctx.fill();
-    // Dot centrale
-    ctx.globalAlpha=0.35+pulse*0.25;
-    ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
-    // Icona nota sopra il dot
-    ctx.globalAlpha=0.45+pulse*0.15;
-    ctx.fillStyle=PAL.inkDim;
-    ctx.font=`${lineGap*0.72}px Georgia,serif`;
-    ctx.textAlign='center';
-    ctx.fillText('♩', cx, cy-r*1.8);
-    ctx.restore();
-  }
-
   function drawListeningDot() {
     const pulse=0.5+0.5*Math.sin(frameN*0.1);
     ctx.save(); ctx.fillStyle=PAL.staff; ctx.globalAlpha=0.3+pulse*0.4;
     ctx.beginPath(); ctx.arc(W/2,staffY-lineGap*2,lineGap*0.4,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawTuningState() {
+    const pulse = 0.5 + 0.5*Math.sin(frameN*0.08);
+    ctx.save();
+    ctx.textAlign = 'center';
+    if (!tuningNote) {
+      ctx.font      = `italic ${lineGap*0.72}px 'EB Garamond',Georgia,serif`;
+      ctx.fillStyle = PAL.inkDim;
+      ctx.globalAlpha = 0.5 + pulse*0.25;
+      ctx.fillText('Suona qualsiasi nota', W*0.56, staffY - lineGap*2.6);
+    } else {
+      drawNoteSymbol(noteX, tuningNote, 'current', true);
+      ctx.font      = `italic ${lineGap*0.62}px 'EB Garamond',Georgia,serif`;
+      ctx.fillStyle = PAL.ok;
+      ctx.globalAlpha = 0.9;
+      ctx.fillText('✓ rilevato', W*0.56, staffY + lineGap*2.2);
+    }
     ctx.restore();
   }
 
@@ -758,7 +773,13 @@
   function loop(ts) {
     if (!running) return;
     const dt=Math.min(0.05,(ts-lastTs)/1000||0);
-    lastTs=ts; pollAudio(); updateGame(dt); render();
+    lastTs=ts; pollAudio(); updateGame(dt);
+    if (gameState==='tuning' && pendingNote) {
+      tuningNote=pendingNote.midi; pendingNote=null;
+      clearTimeout(tuningTimer);
+      tuningTimer=setTimeout(beginPlaying, 800);
+    }
+    render();
     rafId=requestAnimationFrame(loop);
   }
 
@@ -806,6 +827,7 @@
 
   function resetToStart() {
     stopLoop(); releaseMic(); gameState='idle';
+    clearTimeout(tuningTimer); tuningNote=null;
     if (elGameOver)    elGameOver.classList.add('hidden');
     if (elGameBar)     elGameBar.classList.add('hidden');
     if (elCalib)       elCalib.classList.add('hidden');
@@ -857,10 +879,10 @@
 
         <!-- CALIBRAZIONE -->
         <div id="calibScreen" class="pf-overlay hidden">
-          <p class="pf-eyebrow">Accordatura ambiente</p>
+          <p class="pf-eyebrow">Taratura — fase 1 di 2</p>
           <p id="calibText" class="pf-title pf-title--sm">Silenzio…</p>
           <div class="pf-rule"></div>
-          <p class="pf-subtitle">Non fare rumori.<br>Stiamo misurando il rumore di fondo.</p>
+          <p class="pf-subtitle">Non fare rumori.<br>Misuro il rumore di fondo.</p>
         </div>
 
         <!-- PAUSA -->
