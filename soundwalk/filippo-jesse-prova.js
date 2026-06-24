@@ -20,9 +20,9 @@
   const ONSET_WINDOW      = 400;
   const ERROR_COOLDOWN_MS = 1500;
   const CALIB_MS          = 2000;
-  const CALIB_MULT        = 2.5;
-  const CALIB_MIN         = 0.005;
-  const CALIB_MAX         = 0.05;
+  const CALIB_MULT        = 2.0;
+  const CALIB_MIN         = 0.003;
+  const CALIB_MAX         = 0.03;
   const RANKED_CHALLENGES = 20;
   const MAX_SPEED_SEC     = 8;
 
@@ -169,6 +169,8 @@
     const now  = performance.now();
 
     if (gameState === 'calibrating') { calibSamples.push(rms); wasQuiet = true; return; }
+    // Fase taratura: raccoglie volume della nota per ricalibrare la soglia
+    if (gameState === 'tuning' && isLoud) tuningRmsSamples.push(rms);
     if (!isLoud) { wasQuiet = true; pendingNote = null; return; }
 
     if (wasQuiet && (now - lastOnsetMs) > REFRACTORY_MS && now > postErrorUntilMs) {
@@ -222,7 +224,7 @@
      ==================================================================== */
 
   let calibSamples = [];
-  let tuningNote = null, tuningTimer = null;
+  let tuningNote = null, tuningTimer = null, tuningRmsSamples = [];
 
   function startCalibration() {
     gameState='calibrating'; calibSamples=[]; wasQuiet=true;
@@ -249,8 +251,7 @@
 
   function startTuning() {
     gameState = 'tuning';
-    wasQuiet = true; pendingNote = null; tuningNote = null;
-    // auto-avanza dopo 5s se nessuna nota rilevata
+    wasQuiet = true; pendingNote = null; tuningNote = null; tuningRmsSamples = [];
     tuningTimer = setTimeout(beginPlaying, 5000);
   }
 
@@ -272,9 +273,9 @@
     canvas.height = Math.round(H*DPR);
     ctx.setTransform(DPR,0,0,DPR,0,0);
     ctx.imageSmoothingEnabled = false;
-    // Ottimizzato per telefono orizzontale — note contenute nel viewport
+    // Ottimizzato per telefono orizzontale — staff sotto i bottoni (top ~60px)
     lineGap = Math.max(18, Math.round(H * 0.09));
-    staffY  = Math.round(H * 0.46);
+    staffY  = Math.round(H * 0.53);
     noteX   = Math.round(W * 0.56);
   }
 
@@ -776,6 +777,13 @@
     lastTs=ts; pollAudio(); updateGame(dt);
     if (gameState==='tuning' && pendingNote) {
       tuningNote=pendingNote.midi; pendingNote=null;
+      // Ricalibrare la soglia sul volume reale della nota suonata
+      if (tuningRmsSamples.length > 0) {
+        const peakRms = Math.max(...tuningRmsSamples);
+        // soglia = 25% del picco → sufficiente per pianissimo, non triggera il rumore
+        const noteThresh = Math.max(CALIB_MIN, peakRms * 0.25);
+        RMS_THRESH = Math.min(noteThresh, RMS_THRESH); // abbassa se possibile
+      }
       clearTimeout(tuningTimer);
       tuningTimer=setTimeout(beginPlaying, 800);
     }
