@@ -263,9 +263,10 @@
     canvas.height = Math.round(H*DPR);
     ctx.setTransform(DPR,0,0,DPR,0,0);
     ctx.imageSmoothingEnabled = false;
-    lineGap = Math.max(20, Math.round(H*0.095));
-    staffY  = Math.round(H*0.60);
-    noteX   = Math.round(W*0.60); // più a destra, spazio per parentesi accordi
+    // Ottimizzato per telefono orizzontale: rigo più grande, centrato verticalmente
+    lineGap = Math.max(24, Math.round(H * 0.13));
+    staffY  = Math.round(H * 0.56);
+    noteX   = Math.round(W * 0.56);
   }
 
   function staffYOf(midi) {
@@ -468,16 +469,16 @@
     drawTrebleClef(W*0.105, staffY);
   }
 
-  // Usa il carattere Unicode 𝄞 — reale e correttamente proporzionato
+  // Chiave di violino Unicode 𝄞 — baseline calibrata sul secondo rigo (G4)
   function drawTrebleClef(x, botY) {
-    const size = lineGap * 5.8;
+    const size = lineGap * 5.2;
     ctx.save();
-    ctx.fillStyle   = PAL.gold;
-    ctx.font        = `${size}px 'EB Garamond', Georgia, 'Times New Roman', serif`;
-    ctx.textAlign   = 'center';
+    ctx.fillStyle    = PAL.gold;
+    ctx.font         = `${size}px 'EB Garamond', Georgia, 'Times New Roman', serif`;
+    ctx.textAlign    = 'center';
     ctx.textBaseline = 'alphabetic';
-    // La coda del carattere scende sotto il rigo: y = botY + ~1 lineGap
-    ctx.fillText('\u{1D11E}', x, botY + lineGap * 1.1);
+    // Baseline al secondo rigo dal basso (G4): curl della chiave si poggia su quel rigo.
+    ctx.fillText('\u{1D11E}', x, botY - lineGap * 1.0);
     ctx.restore();
   }
 
@@ -512,98 +513,150 @@
 
   function drawChallengeAt(x, ch, isActive) {
     const notes   = ch.notes;
-    const step    = ch.step||0;
+    const step    = ch.step || 0;
+    const isChord = notes.length > 1;
     const offsets = computeXOffsets(notes);
 
-    // Etichetta accordo (in corsivo, sopra la nota più alta)
+    // Etichetta accordo: sopra la nota più alta, solo se attivo
     if (isActive && ch.chordLabel) {
-      const topY = staffYOf(notes[notes.length-1]);
+      const topY = staffYOf(notes[notes.length - 1]);
       ctx.save();
-      ctx.font      = `italic ${lineGap*0.55}px 'EB Garamond',Georgia,serif`;
-      ctx.fillStyle = PAL.gold;
-      ctx.textAlign = 'center';
-      ctx.globalAlpha = 0.68;
-      ctx.fillText(ch.chordLabel, x, topY - lineGap*1.0);
+      ctx.font        = `italic ${lineGap * 0.54}px 'EB Garamond',Georgia,serif`;
+      ctx.fillStyle   = PAL.gold;
+      ctx.textAlign   = 'center';
+      ctx.globalAlpha = 0.72;
+      ctx.fillText(ch.chordLabel, x + lineGap * 0.2, topY - lineGap * 1.2);
       ctx.restore();
     }
 
-    // Parentesi arpeggio (solo se accordo attivo)
-    if (isActive && notes.length>1) {
-      const topY = staffYOf(notes[notes.length-1]) - lineGap*0.3;
-      const botY = staffYOf(notes[0]) + lineGap*0.3;
-      const bx   = x - lineGap*1.5;
-      ctx.save();
-      ctx.strokeStyle=PAL.gold; ctx.lineWidth=Math.max(1,lineGap*0.07); ctx.lineCap='round';
-      ctx.globalAlpha=0.5;
-      ctx.beginPath();
-      ctx.moveTo(bx+lineGap*0.2, topY); ctx.lineTo(bx, topY);
-      ctx.lineTo(bx, botY); ctx.lineTo(bx+lineGap*0.2, botY);
-      ctx.stroke();
-      // Freccina ascendente
-      ctx.beginPath();
-      ctx.moveTo(bx-lineGap*0.14, botY+lineGap*0.04);
-      ctx.lineTo(bx, botY-lineGap*0.28);
-      ctx.lineTo(bx+lineGap*0.14, botY+lineGap*0.04);
-      ctx.stroke();
-      ctx.restore();
+    // Linea arpeggio ondulata (sostituisce la parentesi): notazione standard
+    if (isActive && isChord) {
+      const topNoteY = staffYOf(notes[notes.length - 1]) - lineGap * 0.5;
+      const botNoteY = staffYOf(notes[0]) + lineGap * 0.5;
+      drawArpeggioWave(x - lineGap * 1.2, topNoteY, botNoteY);
     }
 
-    for (let i=0; i<notes.length; i++) {
+    for (let i = 0; i < notes.length; i++) {
       let state;
-      if (!isActive)       state='preview';
-      else if (i<step)     state='done';
-      else if (i===step)   state='current';
-      else                 state='pending';
-      drawNoteSymbol(x+offsets[i], notes[i], state);
+      if (!isActive)       state = 'preview';
+      else if (i < step)   state = 'done';
+      else if (i === step) state = 'current';
+      else                 state = 'pending';
+      // Accordi: senza gambi individuali (la linea arpeggio connette visivamente)
+      drawNoteSymbol(x + offsets[i], notes[i], state, !isChord);
+    }
+
+    // Nota singola: gambo normale
+    if (!isChord && isActive) {
+      // gambo già disegnato da drawNoteSymbol con drawStem=true
     }
   }
 
-  function drawNoteSymbol(x, midi, state) {
-    const y  = staffYOf(midi);
-    const r  = lineGap*0.44;
-    const rx = r*1.4;
-    const pc = ((midi%12)+12)%12;
-    let color, alpha;
-    switch(state) {
-      case 'current': color=PAL.note;   alpha=1;    break;
-      case 'done':    color=PAL.inkDim; alpha=0.38; break;
-      case 'pending': color=PAL.note;   alpha=0.32; break;
-      default:        color=PAL.inkDim; alpha=1;
-    }
-    drawLedgerLines(x,midi);
-    ctx.save(); ctx.globalAlpha*=alpha;
-    if (state==='current') {
-      ctx.shadowColor=PAL.note;
-      ctx.shadowBlur=lineGap*(0.65+Math.sin(frameN*0.14)*0.28);
-    }
-    ctx.fillStyle=color;
-    ctx.beginPath(); ctx.ellipse(x,y,rx,r,-0.3,0,Math.PI*2); ctx.fill();
-    ctx.shadowBlur=0;
-    const midStaffY=staffY-lineGap*2;
-    ctx.strokeStyle=color; ctx.lineWidth=lineGap*0.13; ctx.lineCap='round';
+  // Linea arpeggio ondulata verticale (notazione musicale standard)
+  function drawArpeggioWave(x, topY, botY) {
+    const amp  = lineGap * 0.22;
+    const step = lineGap * 0.55;
+    ctx.save();
+    ctx.strokeStyle = PAL.gold;
+    ctx.lineWidth   = Math.max(1.5, lineGap * 0.075);
+    ctx.lineCap     = 'round';
+    ctx.globalAlpha = 0.65;
     ctx.beginPath();
-    if (y>midStaffY) { ctx.moveTo(x+rx*0.82,y-r*0.3); ctx.lineTo(x+rx*0.82,y-lineGap*3.6); }
-    else             { ctx.moveTo(x-rx*0.82,y+r*0.3); ctx.lineTo(x-rx*0.82,y+lineGap*3.6); }
+    ctx.moveTo(x, botY);
+    let y   = botY;
+    let dir = 1;
+    while (y > topY + step * 0.5) {
+      const ny = Math.max(topY, y - step);
+      const cy = (y + ny) / 2;
+      ctx.quadraticCurveTo(x + amp * dir, cy, x, ny);
+      y  -= step;
+      dir = -dir;
+    }
     ctx.stroke();
-    if (PC_ACC[pc]===1) {
-      ctx.fillStyle=PAL.gold;
-      ctx.font=`${lineGap*1.3}px Georgia,serif`; ctx.textAlign='right';
-      ctx.fillText('♯', x-rx-lineGap*0.28, y+lineGap*0.4);
+    // Freccia verso l'alto (suona dal basso)
+    const aw = lineGap * 0.18;
+    ctx.beginPath();
+    ctx.moveTo(x - aw, topY + lineGap * 0.3);
+    ctx.lineTo(x, topY);
+    ctx.lineTo(x + aw, topY + lineGap * 0.3);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawNoteSymbol(x, midi, state, drawStem = true) {
+    const y  = staffYOf(midi);
+    const r  = lineGap * 0.44;
+    const rx = r * 1.4;
+    const pc = ((midi % 12) + 12) % 12;
+    let color, alpha;
+    switch (state) {
+      case 'current': color = PAL.note;   alpha = 1;    break;
+      case 'done':    color = PAL.inkDim; alpha = 0.38; break;
+      case 'pending': color = PAL.note;   alpha = 0.28; break;
+      default:        color = PAL.inkDim; alpha = 1;
+    }
+
+    drawLedgerLines(x, midi);
+
+    ctx.save();
+    ctx.globalAlpha *= alpha;
+
+    if (state === 'current') {
+      ctx.shadowColor = PAL.note;
+      ctx.shadowBlur  = lineGap * (0.7 + Math.sin(frameN * 0.14) * 0.3);
+    }
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.ellipse(x, y, rx, r, -0.3, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Gambo solo per note singole (accordi usano la linea arpeggio)
+    if (drawStem) {
+      const midStaffY = staffY - lineGap * 2;
+      ctx.strokeStyle = color;
+      ctx.lineWidth   = lineGap * 0.13;
+      ctx.lineCap     = 'round';
+      ctx.beginPath();
+      if (y > midStaffY) {
+        ctx.moveTo(x + rx * 0.82, y - r * 0.3);
+        ctx.lineTo(x + rx * 0.82, y - lineGap * 3.5);
+      } else {
+        ctx.moveTo(x - rx * 0.82, y + r * 0.3);
+        ctx.lineTo(x - rx * 0.82, y + lineGap * 3.5);
+      }
+      ctx.stroke();
+    }
+
+    // Diesis
+    if (PC_ACC[pc] === 1) {
+      ctx.fillStyle   = state === 'current' ? PAL.gold : PAL.inkDim;
+      ctx.font        = `${lineGap * 1.2}px Georgia,serif`;
+      ctx.textAlign   = 'right';
+      ctx.globalAlpha = state === 'current' ? 1 : 0.5;
+      ctx.fillText('♯', x - rx - lineGap * 0.25, y + lineGap * 0.38);
     }
     ctx.restore();
-    if (state==='done') {
-      ctx.save(); ctx.fillStyle=PAL.inkDim; ctx.globalAlpha=0.45;
-      ctx.font=`${lineGap*0.6}px Georgia,serif`; ctx.textAlign='center';
-      ctx.fillText('✓', x+rx+lineGap*0.55, y+lineGap*0.22);
+
+    // Spunta note già suonate dell'arpeggio
+    if (state === 'done') {
+      ctx.save();
+      ctx.fillStyle   = PAL.ok;
+      ctx.globalAlpha = 0.55;
+      ctx.font        = `${lineGap * 0.62}px Georgia,serif`;
+      ctx.textAlign   = 'center';
+      ctx.fillText('✓', x + rx + lineGap * 0.5, y + lineGap * 0.22);
       ctx.restore();
     }
-    if (state==='current') {
-      const oct=Math.floor(midi/12)-1;
-      const name=NOTE_NAMES_IT[pc]+oct;
+
+    // Nome nota corrente (sotto il rigo)
+    if (state === 'current') {
+      const oct  = Math.floor(midi / 12) - 1;
+      const name = NOTE_NAMES_IT[pc] + oct;
       ctx.save();
-      ctx.fillStyle=PAL.inkDim; ctx.globalAlpha=0.7;
-      ctx.font=`${lineGap*0.68}px 'Courier New',monospace`; ctx.textAlign='center';
-      ctx.fillText(name, x, staffY+lineGap*2.4);
+      ctx.fillStyle   = PAL.inkDim;
+      ctx.globalAlpha = 0.72;
+      ctx.font        = `${lineGap * 0.62}px 'Courier New',monospace`;
+      ctx.textAlign   = 'center';
+      ctx.fillText(name, x, staffY + lineGap * 2.2);
       ctx.restore();
     }
   }
@@ -632,29 +685,34 @@
   }
 
   function drawHud() {
-    const fs=lineGap*0.68;
+    const fs  = lineGap * 0.62;
+    // Posizione HUD: angolo in alto a sinistra, oltre la chiave (clef finisce ~W*0.18)
+    const hx  = W * 0.20;
+    const hy  = lineGap * 1.0; // distanza dal bordo superiore
     ctx.save();
 
-    // Score / indicatore (top-left, sotto la prima riga del rigo per non sovrapporre la chiave)
-    const hudY = staffY - lineGap*4.8; // sopra il rigo
-    if (gameMode==='ranked') {
-      ctx.font=`${fs*1.1}px 'Courier New',monospace`;
-      ctx.fillStyle=PAL.gold; ctx.textAlign='left';
-      ctx.fillText(String(score), W*0.24, hudY);
+    if (gameMode === 'ranked') {
+      if (score > 0) {
+        ctx.font      = `${fs * 1.1}px 'Courier New',monospace`;
+        ctx.fillStyle = PAL.gold;
+        ctx.textAlign = 'left';
+        ctx.fillText(String(score), hx, hy);
+      }
     } else {
-      if (notesCorrect>0) {
-        const avg=(totalNoteTimeSec/notesCorrect).toFixed(1)+'s';
-        ctx.font=`${fs*0.85}px 'Courier New',monospace`;
-        ctx.fillStyle=PAL.inkDim; ctx.textAlign='left';
-        ctx.fillText('⌀ '+avg, W*0.24, hudY);
+      if (notesCorrect > 0) {
+        const avg = (totalNoteTimeSec / notesCorrect).toFixed(1) + 's';
+        ctx.font      = `${fs}px 'Courier New',monospace`;
+        ctx.fillStyle = PAL.inkDim;
+        ctx.textAlign = 'left';
+        ctx.fillText('⌀ ' + avg, hx, hy);
       }
     }
 
-    // Errori: sotto lo score, stessa colonna sinistra
-    if (errorCount>0) {
-      ctx.font=`${fs}px 'Courier New',monospace`;
-      ctx.fillStyle=PAL.err; ctx.textAlign='left';
-      ctx.fillText(errorCount+' ✗', W*0.24, hudY+fs*1.5);
+    if (errorCount > 0) {
+      ctx.font      = `${fs * 0.9}px 'Courier New',monospace`;
+      ctx.fillStyle = PAL.err;
+      ctx.textAlign = 'left';
+      ctx.fillText(errorCount + ' ✗', hx, hy + fs * 1.4);
     }
 
     ctx.restore();
