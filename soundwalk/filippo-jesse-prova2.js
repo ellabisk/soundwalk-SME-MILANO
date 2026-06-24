@@ -1,8 +1,7 @@
 /* =====================================================================
-   SOUNDWALK — SALA 131 · IL PIANOFORTE
-   YIN pitch detection + threshold-crossing onset.
-   Modalità RANKED : 20 sfide (10 note + 10 accordi fino alle settime).
-   Modalità FREE   : infinito, solo tempo medio a nota.
+   SOUNDWALK — SALA 131 · IL PIANOFORTE — VERSIONE CHIAVE DOPPIA
+   Chiave di violino (E4–F5) + chiave di basso (G2–B3).
+   Nessun taglio addizionale mai.
    ===================================================================== */
 
 (function () {
@@ -13,7 +12,7 @@
      ==================================================================== */
 
   const YIN_THRESH        = 0.12;
-  const FMIN              = 70;
+  const FMIN              = 55;   // più basso per catturare G2 (98Hz)
   const FMAX              = 1400;
   const STABLE_FRAMES     = 3;
   const REFRACTORY_MS     = 300;
@@ -42,12 +41,19 @@
   };
 
   const NOTE_NAMES_IT = ['DO','DO#','RE','RE#','MI','FA','FA#','SOL','SOL#','LA','LA#','SI'];
-  const WHITE_MIDIS   = [60,62,64,65,67,69,71,72,74,76,77,79,81,83];
+
+  // Note bianche chiave di violino: E4–F5 (senza tagli addizionali)
+  const WHITE_MIDIS = [60,62,64,65,67,69,71,72,74,76,77,79,81,83];
+
+  // Note bianche chiave di basso: G2–B3 (senza tagli addizionali)
+  const BASS_MIDIS  = [43,45,47,48,50,52,53,55,57,59];
 
   const arpeggioImg = new Image();
   arpeggioImg.src   = 'arpeggio.svg';
 
-  const TREBLE_BOTTOM_MIDI = 64;
+  const TREBLE_BOTTOM_MIDI = 64;  // E4 = primo rigo violino
+  const BASS_BOTTOM_MIDI   = 43;  // G2 = primo rigo basso
+
   const PC_STEP = [0,0,1,1,2,3,3,4,4,5,5,6];
   const PC_ACC  = [0,1,0,1,0,0,1,0,1,0,1,0];
 
@@ -57,29 +63,54 @@
     return oct * 7 + PC_STEP[pc];
   }
 
+  // contesto della chiave corrente — cambia prima di ogni drawChallengeAt
+  let clefCtx = 'treble';
+
+  function staffYOf(midi) {
+    const bottom = clefCtx === 'bass' ? BASS_BOTTOM_MIDI : TREBLE_BOTTOM_MIDI;
+    return staffY - (diatonicIndex(midi) - diatonicIndex(bottom)) * (lineGap/2);
+  }
+
   /* ====================================================================
-     ACCORDI RANKED
+     ACCORDI
      ==================================================================== */
 
   const CHORD_TYPES = [
-    { label: 'triade magg.',  intervals: [4, 7]      }, // lv 0
-    { label: 'triade min.',   intervals: [3, 7]      }, // lv 0
-    { label: 'triade dim.',   intervals: [3, 6]      }, // lv 1
-    { label: 'sus4',          intervals: [5, 7]      }, // lv 1
-    { label: 'sesta agg.',    intervals: [4, 7, 9]   }, // lv 2
-    { label: 'min 7ª',       intervals: [3, 7, 10]  }, // lv 2
-    { label: '7ª dom.',      intervals: [4, 7, 10]  }, // lv 3
-    { label: '7ª magg.',     intervals: [4, 7, 11]  }, // lv 3
-    { label: '7ª dim.',      intervals: [3, 6,  9]  }, // lv 4
-    { label: '½ dim.',       intervals: [3, 6, 10]  }, // lv 4
+    { label: 'triade magg.',  intervals: [4, 7]      },
+    { label: 'triade min.',   intervals: [3, 7]      },
+    { label: 'triade dim.',   intervals: [3, 6]      },
+    { label: 'sus4',          intervals: [5, 7]      },
+    { label: 'sesta agg.',    intervals: [4, 7, 9]   },
+    { label: 'min 7ª',       intervals: [3, 7, 10]  },
+    { label: '7ª dom.',      intervals: [4, 7, 10]  },
+    { label: '7ª magg.',     intervals: [4, 7, 11]  },
+    { label: '7ª dim.',      intervals: [3, 6,  9]  },
+    { label: '½ dim.',       intervals: [3, 6, 10]  },
   ];
 
   function buildRankedChord(typeIdx) {
     const { intervals } = CHORD_TYPES[typeIdx];
-    // Radice max G4 (67) → nota top max F5 (77, +10 semitoni)
     const roots = WHITE_MIDIS.filter(m => m >= 60 && m <= 67);
     const root  = roots[Math.floor(Math.random() * roots.length)];
     return [root, ...intervals.map(i => root + i)].sort((a, b) => a - b);
+  }
+
+  // Accordo in chiave di basso: radici G2–C3 (43–48), note cap B3 (59)
+  function buildBassChord(typeIdx) {
+    const { intervals } = CHORD_TYPES[typeIdx];
+    const roots = BASS_MIDIS.filter(m => m >= 43 && m <= 48);
+    const root  = roots[Math.floor(Math.random() * roots.length)];
+    const notes = [root, ...intervals.map(i => root + i)].filter(n => n <= 59);
+    return notes.sort((a, b) => a - b);
+  }
+
+  function randomWhiteNote() {
+    const pool = WHITE_MIDIS.filter(m => m >= 64 && m <= 77); // E4–F5
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  function randomBassNote() {
+    return BASS_MIDIS[Math.floor(Math.random() * BASS_MIDIS.length)];
   }
 
   function shuffle(arr) {
@@ -91,13 +122,57 @@
   }
 
   function generateRankedList() {
-    const singles = Array.from({ length: 10 }, () => ({
-      notes: [randomWhiteNote()], step: 0, chordLabel: null
+    const trebleSingles = Array.from({ length: 5 }, () => ({
+      notes: [randomWhiteNote()], step: 0, chordLabel: null, clef: 'treble'
     }));
-    const chords = Array.from({ length: 10 }, (_, i) => ({
-      notes: buildRankedChord(i), step: 0, chordLabel: CHORD_TYPES[i].label
+    const bassSingles = Array.from({ length: 5 }, () => ({
+      notes: [randomBassNote()], step: 0, chordLabel: null, clef: 'bass'
     }));
-    return shuffle([...singles, ...chords]);
+    const trebleChords = Array.from({ length: 5 }, (_, i) => ({
+      notes: buildRankedChord(i), step: 0, chordLabel: CHORD_TYPES[i].label, clef: 'treble'
+    }));
+    const bassChords = Array.from({ length: 5 }, (_, i) => ({
+      notes: buildBassChord(i), step: 0, chordLabel: CHORD_TYPES[i].label, clef: 'bass'
+    }));
+    return shuffle([...trebleSingles, ...bassSingles, ...trebleChords, ...bassChords]);
+  }
+
+  const FREE_INTERVAL_POOL = [
+    [3,4,5],[3,4,5,7],[3,4,5,7,8,9],[3,4,5,7,8,9,12],
+    [2,3,4,5,6,7,8,9,10,11,12]
+  ];
+
+  function generateFreeChallenge(idx) {
+    const isBass = Math.random() < 0.4; // 40% chiave di basso
+    if (idx < 10) return {
+      notes: [isBass ? randomBassNote() : randomWhiteNote()],
+      step: 0, chordLabel: null, clef: isBass ? 'bass' : 'treble'
+    };
+    const level    = Math.min(4, Math.floor((idx-10)/10));
+    const chordProb = Math.min(0.75, 0.22+level*0.14);
+    if (Math.random() > chordProb) return {
+      notes: [isBass ? randomBassNote() : randomWhiteNote()],
+      step: 0, chordLabel: null, clef: isBass ? 'bass' : 'treble'
+    };
+    if (isBass) {
+      // Accordo in chiave di basso
+      const typeIdx = Math.floor(Math.random() * Math.min(CHORD_TYPES.length, (level+1)*2));
+      const notes   = buildBassChord(typeIdx);
+      return { notes, step: 0, chordLabel: CHORD_TYPES[typeIdx].label, clef: 'bass' };
+    }
+    // Accordo in chiave di violino
+    const maxSize = Math.min(4, 2+Math.floor(level/2));
+    const size    = 2+Math.floor(Math.random()*(maxSize-1));
+    const pool    = FREE_INTERVAL_POOL[level];
+    const roots   = WHITE_MIDIS.filter(m => m >= 60 && m <= 67);
+    const root    = roots[Math.floor(Math.random()*roots.length)];
+    const notes   = [root];
+    for (let i=1; i<size; i++) {
+      const iv = pool[Math.floor(Math.random()*pool.length)];
+      const nx = notes[notes.length-1]+iv;
+      if (nx<=77) notes.push(nx);
+    }
+    return { notes: notes.sort((a,b)=>a-b), step: 0, chordLabel: null, clef: 'treble' };
   }
 
   /* ====================================================================
@@ -172,7 +247,6 @@
     const now  = performance.now();
 
     if (gameState === 'calibrating') { calibSamples.push(rms); wasQuiet = true; return; }
-    // Fase taratura: raccoglie volume della nota per ricalibrare la soglia
     if (gameState === 'tuning' && isLoud) tuningRmsSamples.push(rms);
     if (!isLoud) { wasQuiet = true; pendingNote = null; return; }
 
@@ -276,22 +350,16 @@
     canvas.height = Math.round(H*DPR);
     ctx.setTransform(DPR,0,0,DPR,0,0);
     ctx.imageSmoothingEnabled = false;
-    // Ottimizzato per telefono orizzontale — staff nella metà inferiore
     lineGap = Math.max(18, Math.round(H * 0.09));
     staffY  = Math.round(H * 0.62);
     noteX   = Math.round(W * 0.56);
-  }
-
-  function staffYOf(midi) {
-    const steps = diatonicIndex(midi) - diatonicIndex(TREBLE_BOTTOM_MIDI);
-    return staffY - steps*(lineGap/2);
   }
 
   /* ====================================================================
      (4) STATO DI GIOCO
      ==================================================================== */
 
-  let gameState  = 'idle';   // idle | calibrating | playing | paused | finishing | gameover
+  let gameState  = 'idle';
   let gameMode   = 'free';
 
   let challengeList = [];
@@ -314,36 +382,6 @@
 
   const ANIM_DUR = 0.22;
 
-  const FREE_INTERVAL_POOL = [
-    [3,4,5],[3,4,5,7],[3,4,5,7,8,9],[3,4,5,7,8,9,12],
-    [2,3,4,5,6,7,8,9,10,11,12]
-  ];
-
-  function randomWhiteNote() {
-    // cap a F5 (77) per stare nel viewport landscape
-    const pool = WHITE_MIDIS.filter(m => m <= 77);
-    return pool[Math.floor(Math.random() * pool.length)];
-  }
-
-  function generateFreeChallenge(idx) {
-    if (idx<10) return { notes:[randomWhiteNote()], step:0, chordLabel:null };
-    const level    = Math.min(4, Math.floor((idx-10)/10));
-    const chordProb = Math.min(0.75, 0.22+level*0.14);
-    if (Math.random()>chordProb) return { notes:[randomWhiteNote()], step:0, chordLabel:null };
-    const maxSize = Math.min(4,2+Math.floor(level/2));
-    const size    = 2+Math.floor(Math.random()*(maxSize-1));
-    const pool    = FREE_INTERVAL_POOL[level];
-    const roots   = WHITE_MIDIS.filter(m=>m>=60&&m<=67);
-    const root    = roots[Math.floor(Math.random()*roots.length)];
-    const notes   = [root];
-    for (let i=1; i<size; i++) {
-      const iv = pool[Math.floor(Math.random()*pool.length)];
-      const nx = notes[notes.length-1]+iv;
-      if (nx<=77) notes.push(nx);
-    }
-    return { notes:notes.sort((a,b)=>a-b), step:0, chordLabel:null };
-  }
-
   function beginPlaying() {
     gameState='playing'; score=0; errorCount=0; flashErr=0; popups=[];
     pendingNote=null; wasQuiet=true; onsetPending=false; stableMidi=-1; stableCount=0;
@@ -362,6 +400,7 @@
   function onNoteDetected(midi) {
     if (gameState!=='playing') return;
     if (anim && anim.type!=='idle') return;
+    clefCtx = challenge.clef || 'treble'; // importante: imposta prima di staffYOf
     const targetMidi = challenge.notes[challenge.step];
     const elapsed    = (performance.now()-noteStartTime)/1000;
     if (midi===targetMidi) {
@@ -459,9 +498,9 @@
     } else if (gameState==='tuning') {
       drawTuningState();
     } else if (gameState==='paused') {
-      // disegna la nota ferma sbiadita
       if (challenge && anim) {
         ctx.save(); ctx.globalAlpha=0.35;
+        clefCtx = challenge.clef || 'treble';
         drawChallengeAt(noteX,challenge,true);
         ctx.restore();
       }
@@ -483,10 +522,11 @@
       ctx.beginPath(); ctx.moveTo(W*0.06,y); ctx.lineTo(W*0.94,y); ctx.stroke();
     }
     ctx.globalAlpha=1;
-    drawTrebleClef(W*0.105, staffY);
+    const activeClef = challenge ? (challenge.clef || 'treble') : 'treble';
+    if (activeClef === 'bass') drawBassClef(W*0.105, staffY);
+    else                       drawTrebleClef(W*0.105, staffY);
   }
 
-  // Chiave di violino Unicode 𝄞 — baseline calibrata sul secondo rigo (G4)
   function drawTrebleClef(x, botY) {
     const size = lineGap * 6.4;
     ctx.save();
@@ -498,12 +538,23 @@
     ctx.restore();
   }
 
-  /* ── Calcola gli offset X per le note di un accordo ── */
+  // Chiave di basso (F clef) — il taglio dei due puntini cade sul quarto rigo (F3)
+  function drawBassClef(x, botY) {
+    const size = lineGap * 3.8;
+    ctx.save();
+    ctx.fillStyle    = PAL.gold;
+    ctx.font         = `${size}px 'EB Garamond', Georgia, 'Times New Roman', serif`;
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'alphabetic';
+    // baseline calibrata: il glifo 𝄢 si posiziona con la F circa sul 4° rigo (botY-3*lineGap)
+    ctx.fillText('\u{1D122}', x, botY - lineGap * 1.8);
+    ctx.restore();
+  }
+
   function computeXOffsets(notes) {
     const offsets = new Array(notes.length).fill(0);
     for (let i=1; i<notes.length; i++) {
       const dDist = Math.abs(diatonicIndex(notes[i]) - diatonicIndex(notes[i-1]));
-      // Se i diatonic step <= 1, alterna: se la nota precedente era a 0 vai a +offset, viceversa
       offsets[i] = dDist<=1 ? (offsets[i-1]===0 ? lineGap*1.05 : 0) : 0;
     }
     return offsets;
@@ -528,6 +579,9 @@
   }
 
   function drawChallengeAt(x, ch, isActive) {
+    const prevClef = clefCtx;
+    clefCtx = ch.clef || 'treble';
+
     const notes   = ch.notes;
     const step    = ch.step || 0;
     const isChord = notes.length > 1;
@@ -544,17 +598,14 @@
       }).join(' + ');
       ctx.save();
       ctx.textAlign = 'left';
-      // fondamentale
       ctx.font      = `${lineGap * 0.82}px 'Cormorant Garamond',Georgia,serif`;
       ctx.fillStyle = PAL.note;
       ctx.globalAlpha = 0.90;
       ctx.fillText(rootName, W * 0.045, staffY + lineGap * 1.7);
-      // tipo accordo
       ctx.font      = `italic ${lineGap * 0.56}px 'EB Garamond',Georgia,serif`;
       ctx.fillStyle = PAL.gold;
       ctx.globalAlpha = 0.75;
       ctx.fillText(ch.chordLabel, W * 0.045, staffY + lineGap * 2.45);
-      // note da suonare (per chi non conosce la teoria)
       ctx.font      = `${lineGap * 0.50}px 'Courier New',monospace`;
       ctx.fillStyle = PAL.inkDim;
       ctx.globalAlpha = 0.60;
@@ -580,45 +631,10 @@
       else if (i < step)   state = 'done';
       else if (i === step) state = 'current';
       else                 state = 'pending';
-      // Accordi: senza gambi individuali (la linea arpeggio connette visivamente)
       drawNoteSymbol(x + offsets[i], notes[i], state, !isChord);
     }
 
-    // Nota singola: gambo normale
-    if (!isChord && isActive) {
-      // gambo già disegnato da drawNoteSymbol con drawStem=true
-    }
-  }
-
-  // Linea arpeggio ondulata verticale (notazione musicale standard)
-  function drawArpeggioWave(x, topY, botY) {
-    const amp  = lineGap * 0.22;
-    const step = lineGap * 0.55;
-    ctx.save();
-    ctx.strokeStyle = PAL.gold;
-    ctx.lineWidth   = Math.max(1.5, lineGap * 0.075);
-    ctx.lineCap     = 'round';
-    ctx.globalAlpha = 0.65;
-    ctx.beginPath();
-    ctx.moveTo(x, botY);
-    let y   = botY;
-    let dir = 1;
-    while (y > topY + step * 0.5) {
-      const ny = Math.max(topY, y - step);
-      const cy = (y + ny) / 2;
-      ctx.quadraticCurveTo(x + amp * dir, cy, x, ny);
-      y  -= step;
-      dir = -dir;
-    }
-    ctx.stroke();
-    // Freccia verso l'alto (suona dal basso)
-    const aw = lineGap * 0.18;
-    ctx.beginPath();
-    ctx.moveTo(x - aw, topY + lineGap * 0.3);
-    ctx.lineTo(x, topY);
-    ctx.lineTo(x + aw, topY + lineGap * 0.3);
-    ctx.stroke();
-    ctx.restore();
+    clefCtx = prevClef;
   }
 
   function drawNoteSymbol(x, midi, state, drawStem = true) {
@@ -647,7 +663,6 @@
     ctx.beginPath(); ctx.ellipse(x, y, rx, r, -0.3, 0, Math.PI * 2); ctx.fill();
     ctx.shadowBlur = 0;
 
-    // Gambo solo per note singole (accordi usano la linea arpeggio)
     if (drawStem) {
       const midStaffY = staffY - lineGap * 2;
       ctx.strokeStyle = color;
@@ -664,7 +679,6 @@
       ctx.stroke();
     }
 
-    // Diesis (a destra della testa di nota)
     if (PC_ACC[pc] === 1) {
       ctx.fillStyle   = state === 'current' ? PAL.gold : PAL.inkDim;
       ctx.font        = `${lineGap * 1.2}px Georgia,serif`;
@@ -674,7 +688,6 @@
     }
     ctx.restore();
 
-    // Spunta note già suonate dell'arpeggio
     if (state === 'done') {
       ctx.save();
       ctx.fillStyle   = PAL.ok;
@@ -685,7 +698,6 @@
       ctx.restore();
     }
 
-    // Nome nota corrente (sotto il rigo) — solo note singole, non accordi
     if (state === 'current' && drawStem) {
       const oct  = Math.floor(midi / 12) - 1;
       const name = NOTE_NAMES_IT[pc] + oct;
@@ -699,10 +711,13 @@
     }
   }
 
-  function drawLedgerLines(x,midi) {
-    const y=staffYOf(midi); const topY=staffY-lineGap*4;
-    const half=lineGap/2; const lw=lineGap*1.55;
-    ctx.strokeStyle=PAL.staff; ctx.lineWidth=Math.max(1,lineGap*0.075);
+  function drawLedgerLines(x, midi) {
+    const y    = staffYOf(midi);
+    const topY = staffY - lineGap*4;
+    const half = lineGap/2;
+    const lw   = lineGap*1.55;
+    ctx.strokeStyle = PAL.staff;
+    ctx.lineWidth   = Math.max(1, lineGap*0.075);
     for (let ly=staffY+lineGap; ly<=y+half-1; ly+=lineGap) {
       ctx.beginPath(); ctx.moveTo(x-lw,ly); ctx.lineTo(x+lw,ly); ctx.stroke();
     }
@@ -724,13 +739,11 @@
 
   function drawHud() {
     const fs = lineGap * 0.62;
-    // Score/tempo a sinistra, errori accanto sulla stessa riga
     const hx = W * 0.20;
-    const ex = W * 0.38; // errori a destra del punteggio
+    const ex = W * 0.38;
     const hy = lineGap * 1.2;
     ctx.save();
     ctx.textAlign = 'left';
-
     if (gameMode === 'ranked') {
       if (score > 0) {
         ctx.font = `${fs * 1.1}px 'Courier New',monospace`;
@@ -745,13 +758,11 @@
         ctx.fillText('⌀ ' + avg, hx, hy);
       }
     }
-
     if (errorCount > 0) {
       ctx.font = `${fs * 0.9}px 'Courier New',monospace`;
       ctx.fillStyle = PAL.err;
       ctx.fillText(errorCount + ' ✗', ex, hy);
     }
-
     ctx.restore();
   }
 
@@ -772,6 +783,7 @@
       ctx.globalAlpha = 0.5 + pulse*0.25;
       ctx.fillText('Suona qualsiasi nota', W*0.56, staffY - lineGap*2.6);
     } else {
+      clefCtx = 'treble'; // nota di taratura sempre su violino
       drawNoteSymbol(noteX, tuningNote, 'current', true);
       ctx.font      = `italic ${lineGap*0.62}px 'EB Garamond',Georgia,serif`;
       ctx.fillStyle = PAL.ok;
@@ -793,12 +805,10 @@
     lastTs=ts; pollAudio(); updateGame(dt);
     if (gameState==='tuning' && pendingNote) {
       tuningNote=pendingNote.midi; pendingNote=null;
-      // Ricalibrare la soglia sul volume reale della nota suonata
       if (tuningRmsSamples.length > 0) {
         const peakRms = Math.max(...tuningRmsSamples);
-        // soglia = 25% del picco → sufficiente per pianissimo, non triggera il rumore
         const noteThresh = Math.max(CALIB_MIN, peakRms * 0.25);
-        RMS_THRESH = Math.min(noteThresh, RMS_THRESH); // abbassa se possibile
+        RMS_THRESH = Math.min(noteThresh, RMS_THRESH);
       }
       clearTimeout(tuningTimer);
       tuningTimer=setTimeout(beginPlaying, 800);
@@ -830,7 +840,7 @@
   function resumeGame() {
     if (gameState!=='paused') return;
     gameState='playing';
-    noteStartTime=performance.now(); // resetta il timer per non penalizzare il tempo di pausa
+    noteStartTime=performance.now();
     if (elPauseScreen) elPauseScreen.classList.add('hidden');
     if (elPauseBtn) elPauseBtn.textContent='⏸';
   }
@@ -850,7 +860,7 @@
   let initialized=false;
 
   function resetToStart() {
-    stopLoop(); releaseMic(); gameState='idle';
+    stopLoop(); releaseMic(); gameState='idle'; clefCtx='treble';
     clearTimeout(tuningTimer); tuningNote=null;
     if (elGameOver)    elGameOver.classList.add('hidden');
     if (elGameBar)     elGameBar.classList.add('hidden');
@@ -861,14 +871,14 @@
     render();
   }
 
-  function stopPianoforte() { resetToStart(); }
-  window.stopPianoforte = stopPianoforte;
+  function stopPianoforte2() { resetToStart(); }
+  window.stopPianoforte2 = stopPianoforte2;
 
   /* ====================================================================
      (9) HTML
      ==================================================================== */
 
-  function creaPianoforte() {
+  function creaPianoforte2() {
     const el=document.getElementById('pianoforte');
     if (!el) return;
     el.innerHTML=`
@@ -880,28 +890,26 @@
           <button id="exitBtn"  class="pf-iconbtn" aria-label="Risultati / esci">✕</button>
         </div>
 
-        <!-- START: selezione modalità -->
         <div id="startScreen" class="pf-overlay">
-          <p class="pf-eyebrow">Sala 131 · il Pianoforte</p>
+          <p class="pf-eyebrow">Sala 131 · il Pianoforte — Range Esteso</p>
           <h1 class="pf-title">Il Direttore</h1>
           <div class="pf-rule"></div>
           <div class="pf-modeGrid">
             <button class="pf-modeCard" id="modeRanked">
               <span class="pf-modeIcon">♙</span>
               <span class="pf-modeName">Ranked</span>
-              <span class="pf-modeDesc">20 sfide — note e accordi fino alle settime. Punteggio finale.</span>
+              <span class="pf-modeDesc">20 sfide — violino e basso, note e accordi.</span>
             </button>
             <button class="pf-modeCard" id="modeFree">
               <span class="pf-modeIcon">♩</span>
               <span class="pf-modeName">Free</span>
-              <span class="pf-modeDesc">Infinito, senza punteggio. Solo il tuo tempo medio a nota.</span>
+              <span class="pf-modeDesc">Infinito, senza punteggio. Chiave doppia.</span>
             </button>
           </div>
           <p class="pf-hint">Tieni il telefono vicino al pianoforte. Useremo il microfono.</p>
-          <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna indietro</button>
+          <button class="pf-back" onclick="if(window.stopPianoforte2)window.stopPianoforte2();mostraPagina('menu')">Torna indietro</button>
         </div>
 
-        <!-- CALIBRAZIONE -->
         <div id="calibScreen" class="pf-overlay hidden">
           <p class="pf-eyebrow">Taratura — fase 1 di 2</p>
           <p id="calibText" class="pf-title pf-title--sm">Silenzio…</p>
@@ -909,7 +917,6 @@
           <p class="pf-subtitle">Non fare rumori.<br>Misuro il rumore di fondo.</p>
         </div>
 
-        <!-- PAUSA -->
         <div id="pauseScreen" class="pf-overlay hidden">
           <p class="pf-eyebrow">In pausa</p>
           <h2 class="pf-title pf-title--sm">∥</h2>
@@ -920,7 +927,6 @@
           <button class="pf-back" id="pauseExitBtn">Abbandona</button>
         </div>
 
-        <!-- RIEPILOGO -->
         <div id="gameOverScreen" class="pf-overlay hidden">
           <p class="pf-eyebrow">Fine del concerto</p>
           <h2 class="pf-title pf-title--sm">Sipario</h2>
@@ -963,12 +969,12 @@
           <div class="pf-btnRow" style="margin-top:4px">
             <button id="restartBtn" class="pf-bigBtn">Da capo</button>
           </div>
-          <button class="pf-back" onclick="if(window.stopPianoforte)window.stopPianoforte();mostraPagina('menu')">Torna al menu</button>
+          <button class="pf-back" onclick="if(window.stopPianoforte2)window.stopPianoforte2();mostraPagina('menu')">Torna al menu</button>
         </div>
       </div>
     `;
   }
-  window.creaPianoforte=creaPianoforte;
+  window.creaPianoforte2=creaPianoforte2;
 
   function cacheElements() {
     canvas          = document.getElementById('gameCanvas');
@@ -1005,8 +1011,8 @@
     startLoop(); startCalibration();
   }
 
-  function avviaPianoforteInit() {
-    if (!document.getElementById('gameCanvas')) creaPianoforte();
+  function avviaPianoforte2Init() {
+    if (!document.getElementById('gameCanvas')) creaPianoforte2();
     if (!cacheElements()) return;
     resizeCanvas();
     if (!initialized) {
@@ -1033,6 +1039,6 @@
     };
     resetToStart();
   }
-  window.avviaPianoforteInit=avviaPianoforteInit;
+  window.avviaPianoforte2Init=avviaPianoforte2Init;
 
 })();
